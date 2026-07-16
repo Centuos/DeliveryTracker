@@ -1,0 +1,6 @@
+{
+  "name": "Manjara mane Aduge",
+  "description": "Real-time delivery tracking and billing management system for Manjara mane Aduge catering business.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

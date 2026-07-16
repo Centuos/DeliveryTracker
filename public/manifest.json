@@ -1,0 +1,22 @@
+{
+  "short_name": "Manjara Mane",
+  "name": "Manjara mane Aduge",
+  "description": "Real-time delivery tracking and billing management system for Manjara mane Aduge catering business.",
+  "icons": [
+    {
+      "src": "https://img.icons8.com/color/192/delivery-food.png",
+      "type": "image/png",
+      "sizes": "192x192"
+    },
+    {
+      "src": "https://img.icons8.com/color/512/delivery-food.png",
+      "type": "image/png",
+      "sizes": "512x512"
+    }
+  ],
+  "start_url": "/",
+  "background_color": "#fbfbfb",
+  "theme_color": "#f97316",
+  "display": "standalone",
+  "orientation": "portrait"
+}

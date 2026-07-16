@@ -1,0 +1,173 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 320" width="100%" height="100%">
+  <defs>
+    <!-- Fonts -->
+    <style type="text/css">
+      @import url('https://fonts.googleapis.com/css2?family=Baloo+Tamma+2:wght@600;800&amp;family=Hubballi&amp;display=swap');
+      
+      .kannada-top {
+        font-family: 'Baloo Tamma 2', 'Noto Sans Kannada', sans-serif;
+        font-weight: 800;
+        font-size: 58px;
+        fill: url(#gold-grad-light);
+        text-anchor: middle;
+        letter-spacing: 2px;
+        filter: drop-shadow(2px 3px 0px rgba(0, 0, 0, 0.7));
+      }
+      
+      .kannada-bottom {
+        font-family: 'Baloo Tamma 2', 'Noto Sans Kannada', sans-serif;
+        font-weight: 800;
+        font-size: 104px;
+        fill: url(#gold-grad-rich);
+        text-anchor: middle;
+        filter: drop-shadow(4px 6px 0px rgba(0, 0, 0, 0.8));
+      }
+      
+      .english-sub {
+        font-family: 'Hubballi', 'Inter', sans-serif;
+        font-weight: 900;
+        font-size: 18px;
+        fill: #fcdb83;
+        text-anchor: middle;
+        letter-spacing: 9px;
+        opacity: 0.95;
+      }
+      
+      .steam-wave {
+        fill: none;
+        stroke: url(#gold-grad-light);
+        stroke-width: 4;
+        stroke-linecap: round;
+        opacity: 0.85;
+      }
+      
+      .mandala-line {
+        fill: none;
+        stroke: #ffd700;
+        opacity: 0.04;
+        stroke-width: 1;
+      }
+    </style>
+
+    <!-- Gradients -->
+    <radialGradient id="bg-grad" cx="50%" cy="50%" r="70%">
+      <stop offset="0%" stop-color="#4a1a02" />
+      <stop offset="60%" stop-color="#300f01" />
+      <stop offset="100%" stop-color="#1c0700" />
+    </radialGradient>
+
+    <linearGradient id="gold-grad-rich" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#ffe8a1" />
+      <stop offset="30%" stop-color="#f2b444" />
+      <stop offset="70%" stop-color="#d68411" />
+      <stop offset="100%" stop-color="#8c4e03" />
+    </linearGradient>
+
+    <linearGradient id="gold-grad-light" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff" />
+      <stop offset="40%" stop-color="#fce8b3" />
+      <stop offset="100%" stop-color="#df9a28" />
+    </linearGradient>
+
+    <!-- Drop Shadows -->
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="8" stdDeviation="8" flood-color="#000" flood-opacity="0.5" />
+    </filter>
+  </defs>
+
+  <!-- Background Layer with Ornate Frame -->
+  <g filter="url(#shadow)">
+    <!-- Main Ornate Path -->
+    <path d="M 60,110 
+             C 60,95 75,80 90,80 
+             L 260,80 
+             C 275,80 290,65 300,50 
+             C 310,35 330,15 360,15 
+             L 440,15 
+             C 470,15 490,35 500,50 
+             C 510,65 525,80 540,80 
+             L 710,80 
+             C 725,80 740,95 740,110 
+             L 740,150 
+             C 740,165 755,180 770,190 
+             C 785,200 785,215 770,225 
+             C 755,235 740,250 740,265 
+             L 740,285 
+             C 740,300 725,310 710,310 
+             L 90,310 
+             C 75,310 60,300 60,285 
+             L 60,265 
+             C 60,250 45,235 30,225 
+             C 15,215 15,200 30,190 
+             C 45,180 60,165 60,150 
+             Z" 
+          fill="url(#bg-grad)" 
+          stroke="#b57a1e" 
+          stroke-width="6" />
+
+    <!-- Inner gold border -->
+    <path d="M 68,115 
+             C 68,103 79,90 92,90 
+             L 255,90 
+             C 271,90 285,74 295,59 
+             C 305,44 324,25 352,25 
+             L 448,25 
+             C 476,25 495,44 505,59 
+             C 515,74 529,90 545,90 
+             L 708,90 
+             C 721,90 732,103 732,115 
+             L 732,145 
+             C 732,159 745,173 759,182 
+             C 772,191 772,204 759,213 
+             C 745,222 732,236 732,250 
+             L 732,280 
+             C 732,292 721,302 708,302 
+             L 92,302 
+             C 79,302 68,292 68,280 
+             L 68,250 
+             C 68,236 55,222 41,213 
+             C 28,204 28,191 41,182 
+             C 55,173 68,159 68,145 
+             Z" 
+          fill="none" 
+          stroke="#fce8b3" 
+          stroke-width="2.5" 
+          opacity="0.9" />
+  </g>
+
+  <!-- Background Decorative Mandala Patterns (Low Opacity) -->
+  <g>
+    <circle cx="400" cy="180" r="130" class="mandala-line" />
+    <circle cx="400" cy="180" r="110" class="mandala-line" stroke-dasharray="4,4" />
+    <circle cx="400" cy="180" r="80" class="mandala-line" />
+    <path d="M 270,180 L 530,180" class="mandala-line" />
+    <path d="M 400,50 L 400,310" class="mandala-line" />
+  </g>
+
+  <!-- Rising Steam Waves (Top Center) representing hot traditional meals -->
+  <g>
+    <!-- Left Steam -->
+    <path d="M 380,10 C 375,0 385,-10 380,-20" class="steam-wave" />
+    <!-- Center Steam -->
+    <path d="M 400,12 C 395,0 405,-12 400,-24" class="steam-wave" stroke-width="4.5" />
+    <!-- Right Steam -->
+    <path d="M 420,10 C 415,0 425,-10 420,-20" class="steam-wave" />
+  </g>
+
+  <!-- Title Text: Kannada Top Line "ಮಂಜರ" -->
+  <text x="400" y="145" class="kannada-top">ಮಂಜರ</text>
+
+  <!-- Decorative separator line with scroll curls -->
+  <g>
+    <path d="M 310,162 Q 400,162 490,162" fill="none" stroke="url(#gold-grad-light)" stroke-width="2" />
+    <circle cx="400" cy="162" r="4.5" fill="#ffd700" />
+    <path d="M 310,162 C 305,162 301,159 301,155 C 301,151 306,149 310,152 C 314,155 311,162 305,162" fill="none" stroke="url(#gold-grad-light)" stroke-width="1.5" />
+    <path d="M 490,162 C 495,162 499,159 499,155 C 499,151 494,149 490,152 C 486,155 489,162 495,162" fill="none" stroke="url(#gold-grad-light)" stroke-width="1.5" />
+  </g>
+
+  <!-- Main text: Kannada Bottom Line "ಅಡುಗೆ ಮನೆ" -->
+  <text x="400" y="258" class="kannada-bottom">ಅಡುಗೆ ಮನೆ</text>
+
+  <!-- English Pronunciation subtitled below -->
+  <text x="404" y="288" class="english-sub">MANJARA MANE ADUGE</text>
+</svg>
