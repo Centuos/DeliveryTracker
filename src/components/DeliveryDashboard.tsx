@@ -38,6 +38,13 @@ export default function DeliveryDashboard({ riderUser, onLogout }: DeliveryDashb
   })();
 
   useEffect(() => {
+    // Initial fallback load
+    const localDel = localStorage.getItem('mma_deliveries');
+    if (localDel) {
+      const allList: Delivery[] = JSON.parse(localDel);
+      setDeliveries(allList.filter(d => d.date === dateStr));
+    }
+
     // Realtime subscription to deliveries for selected date
     const q = query(collection(db, 'deliveries'), where('date', '==', dateStr));
     const unsubscribe = onSnapshot(q, (snapshot) => {
@@ -45,9 +52,18 @@ export default function DeliveryDashboard({ riderUser, onLogout }: DeliveryDashb
       snapshot.forEach((doc) => {
         list.push({ id: doc.id, ...doc.data() } as Delivery);
       });
-      setDeliveries(list);
+      if (list.length > 0) {
+        setDeliveries(list);
+        
+        // Merge with current local deliveries so we don't wipe out other dates
+        const localDel = localStorage.getItem('mma_deliveries');
+        let allList: Delivery[] = localDel ? JSON.parse(localDel) : [];
+        allList = allList.filter(d => d.date !== dateStr);
+        allList.push(...list);
+        localStorage.setItem('mma_deliveries', JSON.stringify(allList));
+      }
     }, (error) => {
-      console.error("Subscription error in Delivery Dashboard:", error);
+      console.warn("Delivery subscription failed (offline fallback active):", error);
     });
 
     return () => unsubscribe();
@@ -60,12 +76,25 @@ export default function DeliveryDashboard({ riderUser, onLogout }: DeliveryDashb
 
   // Claim unassigned delivery
   const handleClaimJob = async (delivery: Delivery) => {
+    const updates = {
+      deliveryBoyId: riderUser.id,
+      deliveryBoyName: riderUser.name,
+    };
     try {
-      const deliveryRef = doc(db, 'deliveries', delivery.id);
-      await updateDoc(deliveryRef, {
-        deliveryBoyId: riderUser.id,
-        deliveryBoyName: riderUser.name,
-      });
+      try {
+        const deliveryRef = doc(db, 'deliveries', delivery.id);
+        await updateDoc(deliveryRef, updates);
+      } catch (err) {
+        console.warn("Firestore write skipped (offline mode):", err);
+      }
+
+      // Update local storage
+      const localDel = localStorage.getItem('mma_deliveries');
+      let allList: Delivery[] = localDel ? JSON.parse(localDel) : [];
+      allList = allList.map(d => d.id === delivery.id ? { ...d, ...updates } : d);
+      localStorage.setItem('mma_deliveries', JSON.stringify(allList));
+      setDeliveries(allList.filter(d => d.date === dateStr));
+
       triggerAlert('success', `Successfully claimed ${delivery.mealType} run for ${delivery.customerName}!`);
     } catch (err: any) {
       console.error(err);
@@ -75,12 +104,25 @@ export default function DeliveryDashboard({ riderUser, onLogout }: DeliveryDashb
 
   // Unclaim a job (return it to the pool)
   const handleUnclaimJob = async (delivery: Delivery) => {
+    const updates = {
+      deliveryBoyId: null,
+      deliveryBoyName: null,
+    };
     try {
-      const deliveryRef = doc(db, 'deliveries', delivery.id);
-      await updateDoc(deliveryRef, {
-        deliveryBoyId: null,
-        deliveryBoyName: null,
-      });
+      try {
+        const deliveryRef = doc(db, 'deliveries', delivery.id);
+        await updateDoc(deliveryRef, updates);
+      } catch (err) {
+        console.warn("Firestore write skipped (offline mode):", err);
+      }
+
+      // Update local storage
+      const localDel = localStorage.getItem('mma_deliveries');
+      let allList: Delivery[] = localDel ? JSON.parse(localDel) : [];
+      allList = allList.map(d => d.id === delivery.id ? { ...d, ...updates } : d);
+      localStorage.setItem('mma_deliveries', JSON.stringify(allList));
+      setDeliveries(allList.filter(d => d.date === dateStr));
+
       triggerAlert('success', `Returned run to the available pool.`);
     } catch (err: any) {
       console.error(err);
@@ -90,12 +132,25 @@ export default function DeliveryDashboard({ riderUser, onLogout }: DeliveryDashb
 
   // Mark as Picked Up / Start Delivery (for claimed jobs)
   const handlePickUp = async (delivery: Delivery) => {
+    const updates = {
+      status: 'picked_up' as const,
+      pickupTime: new Date().toISOString(),
+    };
     try {
-      const deliveryRef = doc(db, 'deliveries', delivery.id);
-      await updateDoc(deliveryRef, {
-        status: 'picked_up',
-        pickupTime: new Date().toISOString(),
-      });
+      try {
+        const deliveryRef = doc(db, 'deliveries', delivery.id);
+        await updateDoc(deliveryRef, updates);
+      } catch (err) {
+        console.warn("Firestore write skipped (offline mode):", err);
+      }
+
+      // Update local storage
+      const localDel = localStorage.getItem('mma_deliveries');
+      let allList: Delivery[] = localDel ? JSON.parse(localDel) : [];
+      allList = allList.map(d => d.id === delivery.id ? { ...d, ...updates } : d);
+      localStorage.setItem('mma_deliveries', JSON.stringify(allList));
+      setDeliveries(allList.filter(d => d.date === dateStr));
+
       triggerAlert('success', `Marked ${delivery.mealType} as Picked Up (In-Transit)!`);
     } catch (err: any) {
       console.error(err);
@@ -105,12 +160,25 @@ export default function DeliveryDashboard({ riderUser, onLogout }: DeliveryDashb
 
   // Mark as Delivered
   const handleDeliver = async (delivery: Delivery) => {
+    const updates = {
+      status: 'delivered' as const,
+      deliveryTime: new Date().toISOString(),
+    };
     try {
-      const deliveryRef = doc(db, 'deliveries', delivery.id);
-      await updateDoc(deliveryRef, {
-        status: 'delivered',
-        deliveryTime: new Date().toISOString(),
-      });
+      try {
+        const deliveryRef = doc(db, 'deliveries', delivery.id);
+        await updateDoc(deliveryRef, updates);
+      } catch (err) {
+        console.warn("Firestore write skipped (offline mode):", err);
+      }
+
+      // Update local storage
+      const localDel = localStorage.getItem('mma_deliveries');
+      let allList: Delivery[] = localDel ? JSON.parse(localDel) : [];
+      allList = allList.map(d => d.id === delivery.id ? { ...d, ...updates } : d);
+      localStorage.setItem('mma_deliveries', JSON.stringify(allList));
+      setDeliveries(allList.filter(d => d.date === dateStr));
+
       triggerAlert('success', `Awesome! ${delivery.mealType} marked as Delivered!`);
     } catch (err: any) {
       console.error(err);

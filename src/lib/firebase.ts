@@ -1,22 +1,25 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
-import { getFirestore, enableIndexedDbPersistence } from 'firebase/firestore';
+import { initializeFirestore, enableIndexedDbPersistence } from 'firebase/firestore';
+import appletConfig from '../../firebase-applet-config.json';
 
 const firebaseConfig = {
-  apiKey: "AIzaSyB41MwE-wQWhf0WY9WgLRSAbhQRGncJbfI",
-  authDomain: "delivery-tracker-768b7.firebaseapp.com",
-  projectId: "delivery-tracker-768b7",
-  storageBucket: "delivery-tracker-768b7.firebasestorage.app",
-  messagingSenderId: "1091248311144",
-  appId: "1:1091248311144:web:626dd5abfff77f2c56a4dd",
-  measurementId: "G-SQW3XS8NG0"
+  apiKey: appletConfig.apiKey || "AIzaSyB41MwE-wQWhf0WY9WgLRSAbhQRGncJbfI",
+  authDomain: appletConfig.authDomain || "delivery-tracker-768b7.firebaseapp.com",
+  projectId: appletConfig.projectId || "delivery-tracker-768b7",
+  storageBucket: appletConfig.storageBucket || "delivery-tracker-768b7.firebasestorage.app",
+  messagingSenderId: appletConfig.messagingSenderId || "1091248311144",
+  appId: appletConfig.appId || "1:1091248311144:web:626dd5abfff77f2c56a4dd",
+  measurementId: appletConfig.measurementId || "G-SQW3XS8NG0"
 };
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 
-// Use default firestore database for user's custom Firebase Project
-const db = getFirestore(app);
+// Use initializeFirestore with long-polling to prevent connection blocks inside iframes
+const db = initializeFirestore(app, {
+  experimentalForceLongPolling: true,
+});
 
 
 // Enable offline persistence

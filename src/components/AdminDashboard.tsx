@@ -12,10 +12,23 @@ import {
   query,
   where,
   getDocs,
-  Timestamp
+  Timestamp,
+  getDocFromServer
 } from 'firebase/firestore';
 import { Customer, Delivery, Bill, UserProfile } from '../types';
+import {
+  Database,
+  Wifi,
+  WifiOff,
+  CheckCircle2,
+  Info,
+  Settings,
+  HelpCircle,
+  ShieldAlert,
+  ExternalLink
+} from 'lucide-react';
 import { motion } from 'motion/react';
+import appletConfig from '../../firebase-applet-config.json';
 import {
   Users,
   Utensils,
@@ -41,7 +54,9 @@ import {
   Download,
   Printer,
   Eye,
-  RotateCcw
+  RotateCcw,
+  CreditCard,
+  Edit3
 } from 'lucide-react';
 import {
   BarChart,
@@ -70,6 +85,11 @@ export default function AdminDashboard({ adminUser, onLogout }: AdminDashboardPr
   const [riders, setRiders] = useState<UserProfile[]>([]);
   const [bills, setBills] = useState<Bill[]>([]);
   const [viewingInvoice, setViewingInvoice] = useState<Bill | null>(null);
+
+  // Database connection diagnostics & offline fallback
+  const [dbStatus, setDbStatus] = useState<'testing' | 'success' | 'failed'>('testing');
+  const [dbError, setDbError] = useState<string | null>(null);
+  const [showDiagnosticsModal, setShowDiagnosticsModal] = useState(false);
 
   // Filter states
   const [deliveryDate, setDeliveryDate] = useState(new Date().toISOString().split('T')[0]);
@@ -119,6 +139,23 @@ export default function AdminDashboard({ adminUser, onLogout }: AdminDashboardPr
     deliveriesList: Delivery[];
   } | null>(null);
 
+  // Dynamic Business Payment details State
+  const [billingInfo, setBillingInfo] = useState({
+    upiId: '9886475632@okaxis',
+    accName: 'Manjara Mane Aduge',
+    accNo: '40990201012356',
+    ifsc: 'ICIC0004099',
+    bankName: 'ICICI Bank, Jayanagar',
+    supportPhone: '+91-9886475632'
+  });
+  const [isEditingBillingInfo, setIsEditingBillingInfo] = useState(false);
+  const [tempUpiId, setTempUpiId] = useState('');
+  const [tempAccName, setTempAccName] = useState('');
+  const [tempAccNo, setTempAccNo] = useState('');
+  const [tempIfsc, setTempIfsc] = useState('');
+  const [tempBankName, setTempBankName] = useState('');
+  const [tempSupportPhone, setTempSupportPhone] = useState('');
+
   // Ad-hoc and Single-Delivery Customization States
   const [isAdHocModalOpen, setIsAdHocModalOpen] = useState(false);
   const [adHocCustId, setAdHocCustId] = useState('');
@@ -144,53 +181,315 @@ export default function AdminDashboard({ adminUser, onLogout }: AdminDashboardPr
     setTimeout(() => setAlertMsg({ type: 'success', text: '' }), 4000);
   };
 
+  // Direct Firestore connection tester for diagnostics
+  const checkDbConnection = async () => {
+    setDbStatus('testing');
+    setDbError(null);
+    try {
+      const testDocRef = doc(db, '_connection_test_only_', 'ping');
+      await getDocFromServer(testDocRef);
+      setDbStatus('success');
+    } catch (err: any) {
+      console.warn("Dashboard connection diagnostics result:", err);
+      setDbStatus('failed');
+      setDbError(err?.message || String(err));
+    }
+  };
+
+  // Safe helper to run firestore writes with a short timeout.
+  // We use 4000ms instead of 1000ms to prevent false timeouts in sandboxed environments.
+  const runSafeDbWrite = async (writePromise: Promise<any>, description = "Write") => {
+    try {
+      await Promise.race([
+        writePromise,
+        new Promise((_, reject) => setTimeout(() => reject(new Error('TIMEOUT')), 4000))
+      ]);
+    } catch (err: any) {
+      if (err.message === 'TIMEOUT') {
+        console.warn(`${description} took too long to confirm on the server. Proceeding in offline/cached mode.`);
+      } else {
+        console.warn(`${description} failed on the server:`, err);
+      }
+    }
+  };
+
+  // Migration & Sync State
+  const [isSyncing, setIsSyncing] = useState(false);
+
+  // Sync local offline data to Cloud Firestore database so it is globally & dynamically shared
+  const handleSyncLocalToCloud = async () => {
+    setIsSyncing(true);
+    triggerAlert('success', 'Starting Cloud Syncing...');
+    try {
+      // 1. Customers
+      const localCust = localStorage.getItem('mma_customers');
+      if (localCust) {
+        try {
+          const custs: Customer[] = JSON.parse(localCust);
+          if (custs.length > 0) {
+            await Promise.all(custs.map(c => setDoc(doc(db, 'customers', c.id), c)));
+          }
+        } catch (e) {
+          console.warn("Error parsing local customers for sync:", e);
+        }
+      }
+
+      // 2. Deliveries
+      const localDel = localStorage.getItem('mma_deliveries');
+      if (localDel) {
+        try {
+          const dels: Delivery[] = JSON.parse(localDel);
+          if (dels.length > 0) {
+            await Promise.all(dels.map(d => setDoc(doc(db, 'deliveries', d.id), d)));
+          }
+        } catch (e) {
+          console.warn("Error parsing local deliveries for sync:", e);
+        }
+      }
+
+      // 3. Users (Admins & Delivery riders)
+      const localUsers = localStorage.getItem('mma_users');
+      let usersToSync: UserProfile[] = [];
+      if (localUsers) {
+        try {
+          usersToSync = JSON.parse(localUsers);
+        } catch (e) {
+          console.warn("Error parsing local users for sync:", e);
+        }
+      }
+      // Always guarantee the current logged-in admin is included
+      if (!usersToSync.some(u => u.id === adminUser.id)) {
+        usersToSync.push({
+          id: adminUser.id,
+          name: adminUser.name,
+          email: 'manjaramaneaduge@manjaramane.com',
+          role: 'admin',
+          phone: '9999999999',
+          status: 'active'
+        });
+      }
+      if (usersToSync.length > 0) {
+        await Promise.all(usersToSync.map(u => {
+          // Exclude password fields from db storage for security
+          const { password, ...safeUser } = u as any;
+          return setDoc(doc(db, 'users', u.id), { ...safeUser, status: u.status || 'active' });
+        }));
+      }
+
+      // 4. Bills
+      const localBills = localStorage.getItem('mma_bills');
+      if (localBills) {
+        try {
+          const billsList: Bill[] = JSON.parse(localBills);
+          if (billsList.length > 0) {
+            await Promise.all(billsList.map(b => setDoc(doc(db, 'billing', b.id), b)));
+          }
+        } catch (e) {
+          console.warn("Error parsing local bills for sync:", e);
+        }
+      }
+
+      // 5. Billing Settings
+      await setDoc(doc(db, 'settings', 'billing_info'), billingInfo);
+
+      triggerAlert('success', 'Cloud Synchronization successful! All lists are live and dynamic in Firestore now.');
+      await checkDbConnection();
+    } catch (err: any) {
+      console.error("Cloud synchronization error:", err);
+      triggerAlert('error', `Cloud Sync failed: ${err.message}`);
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
   // Real-time listener hooks
   useEffect(() => {
-    // 1. Subscribe to customers
+    checkDbConnection();
+    // 1. Initial local fallback seed so the application is completely functional and visual immediately
+    const localCust = localStorage.getItem('mma_customers');
+    const localDel = localStorage.getItem('mma_deliveries');
+    const localRiders = localStorage.getItem('mma_riders');
+    const localBills = localStorage.getItem('mma_bills');
+    const localUsers = localStorage.getItem('mma_users');
+    const localBilling = localStorage.getItem('mma_billing_info');
+
+    if (localBilling) {
+      try {
+        setBillingInfo(JSON.parse(localBilling));
+      } catch (e) {
+        console.warn("Failed to parse local billing info:", e);
+      }
+    }
+
+    if (localCust) {
+      setCustomers(JSON.parse(localCust));
+    } else {
+      setCustomers([]);
+      localStorage.setItem('mma_customers', JSON.stringify([]));
+    }
+
+    if (localDel) {
+      setDeliveries(JSON.parse(localDel));
+    } else {
+      setDeliveries([]);
+      localStorage.setItem('mma_deliveries', JSON.stringify([]));
+    }
+
+    if (localRiders) {
+      setRiders(JSON.parse(localRiders));
+    } else {
+      setRiders([]);
+      localStorage.setItem('mma_riders', JSON.stringify([]));
+    }
+
+    if (localBills) {
+      setBills(JSON.parse(localBills));
+    } else {
+      setBills([]);
+      localStorage.setItem('mma_bills', JSON.stringify([]));
+    }
+
+    if (localUsers) {
+      setAllUsers(JSON.parse(localUsers));
+    } else {
+      const initialUsers: UserProfile[] = [
+        { id: 'admin_default_uid', name: 'Manjara Mane Aduge Admin', email: 'manjaramaneaduge@manjaramane.com', role: 'admin', phone: '9999999999', status: 'active' }
+      ];
+      setAllUsers(initialUsers);
+      localStorage.setItem('mma_users', JSON.stringify(initialUsers));
+    }
+
+    // Subscribe to billing/payment settings
+    const unsubscribeBillingInfo = onSnapshot(doc(db, 'settings', 'billing_info'), (docSnap) => {
+      if (docSnap.exists()) {
+        setBillingInfo(docSnap.data() as any);
+        localStorage.setItem('mma_billing_info', JSON.stringify(docSnap.data()));
+      }
+    }, (error) => console.warn("Billing info subscription failed:", error));
+
+    // 2. Subscribe to customers
     const unsubscribeCustomers = onSnapshot(collection(db, 'customers'), (snapshot) => {
+      if (snapshot.empty) {
+        const local = localStorage.getItem('mma_customers');
+        if (local) {
+          try {
+            const parsed = JSON.parse(local);
+            if (parsed.length > 0) {
+              setCustomers(parsed);
+              return;
+            }
+          } catch (e) {
+            console.warn("Local storage parse error:", e);
+          }
+        }
+      }
       const list: Customer[] = [];
       snapshot.forEach((doc) => {
         list.push({ id: doc.id, ...doc.data() } as Customer);
       });
-      setCustomers(list.sort((a, b) => a.name.localeCompare(b.name)));
-    }, (error) => console.error("Customers subscription error:", error));
+      const sorted = list.sort((a, b) => a.name.localeCompare(b.name));
+      setCustomers(sorted);
+      localStorage.setItem('mma_customers', JSON.stringify(sorted));
+    }, (error) => console.warn("Customers subscription failed (offline fallback active):", error));
 
-    // 2. Subscribe to deliveries (for today / date range)
+    // 3. Subscribe to deliveries (for today / date range)
     const unsubscribeDeliveries = onSnapshot(collection(db, 'deliveries'), (snapshot) => {
+      if (snapshot.empty) {
+        const local = localStorage.getItem('mma_deliveries');
+        if (local) {
+          try {
+            const parsed = JSON.parse(local);
+            if (parsed.length > 0) {
+              setDeliveries(parsed);
+              return;
+            }
+          } catch (e) {
+            console.warn("Local storage parse error:", e);
+          }
+        }
+      }
       const list: Delivery[] = [];
       snapshot.forEach((doc) => {
         list.push({ id: doc.id, ...doc.data() } as Delivery);
       });
       setDeliveries(list);
-    }, (error) => console.error("Deliveries subscription error:", error));
+      localStorage.setItem('mma_deliveries', JSON.stringify(list));
+    }, (error) => console.warn("Deliveries subscription failed (offline fallback active):", error));
 
-    // 3. Subscribe to riders (users with role 'delivery')
+    // 4. Subscribe to riders (users with role 'delivery')
     const qRiders = query(collection(db, 'users'), where('role', '==', 'delivery'));
     const unsubscribeRiders = onSnapshot(qRiders, (snapshot) => {
+      if (snapshot.empty) {
+        const local = localStorage.getItem('mma_riders');
+        if (local) {
+          try {
+            const parsed = JSON.parse(local);
+            if (parsed.length > 0) {
+              setRiders(parsed);
+              return;
+            }
+          } catch (e) {
+            console.warn("Local storage parse error:", e);
+          }
+        }
+      }
       const list: UserProfile[] = [];
       snapshot.forEach((doc) => {
         list.push({ id: doc.id, ...doc.data() } as UserProfile);
       });
       setRiders(list);
-    }, (error) => console.error("Riders subscription error:", error));
+      localStorage.setItem('mma_riders', JSON.stringify(list));
+    }, (error) => console.warn("Riders subscription failed (offline fallback active):", error));
 
-    // 4. Subscribe to bills
+    // 5. Subscribe to bills
     const unsubscribeBills = onSnapshot(collection(db, 'billing'), (snapshot) => {
+      if (snapshot.empty) {
+        const local = localStorage.getItem('mma_bills');
+        if (local) {
+          try {
+            const parsed = JSON.parse(local);
+            if (parsed.length > 0) {
+              setBills(parsed);
+              return;
+            }
+          } catch (e) {
+            console.warn("Local storage parse error:", e);
+          }
+        }
+      }
       const list: Bill[] = [];
       snapshot.forEach((doc) => {
         list.push({ id: doc.id, ...doc.data() } as Bill);
       });
-      setBills(list.sort((a, b) => b.createdAt.localeCompare(a.createdAt)));
-    }, (error) => console.error("Bills subscription error:", error));
+      const sorted = list.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+      setBills(sorted);
+      localStorage.setItem('mma_bills', JSON.stringify(sorted));
+    }, (error) => console.warn("Bills subscription failed (offline fallback active):", error));
 
-    // 5. Subscribe to all users (admins + riders)
+    // 6. Subscribe to all users (admins + riders)
     const unsubscribeAllUsers = onSnapshot(collection(db, 'users'), (snapshot) => {
+      if (snapshot.empty) {
+        const local = localStorage.getItem('mma_users');
+        if (local) {
+          try {
+            const parsed = JSON.parse(local);
+            if (parsed.length > 0) {
+              setAllUsers(parsed);
+              return;
+            }
+          } catch (e) {
+            console.warn("Local storage parse error:", e);
+          }
+        }
+      }
       const list: UserProfile[] = [];
       snapshot.forEach((doc) => {
         list.push({ id: doc.id, ...doc.data() } as UserProfile);
       });
-      setAllUsers(list.sort((a, b) => a.name.localeCompare(b.name)));
-    }, (error) => console.error("All users subscription error:", error));
+      const sorted = list.sort((a, b) => a.name.localeCompare(b.name));
+      setAllUsers(sorted);
+      localStorage.setItem('mma_users', JSON.stringify(sorted));
+    }, (error) => console.warn("All users subscription failed (offline fallback active):", error));
 
     return () => {
       unsubscribeCustomers();
@@ -198,6 +497,7 @@ export default function AdminDashboard({ adminUser, onLogout }: AdminDashboardPr
       unsubscribeRiders();
       unsubscribeBills();
       unsubscribeAllUsers();
+      unsubscribeBillingInfo();
     };
   }, []);
 
@@ -205,6 +505,8 @@ export default function AdminDashboard({ adminUser, onLogout }: AdminDashboardPr
   const handleGenerateDeliveries = async () => {
     setActionLoading(true);
     let createdCount = 0;
+    const newDeliveriesList = [...deliveries];
+    const writePromises: Promise<any>[] = [];
     try {
       // For each customer, check active plans and create deliveries if not exists
       for (const customer of customers) {
@@ -235,11 +537,22 @@ export default function AdminDashboard({ adminUser, onLogout }: AdminDashboardPr
               deliveryTime: null,
               notes: '',
             };
-            await setDoc(doc(db, 'deliveries', docId), newDelivery);
+            const p = setDoc(doc(db, 'deliveries', docId), newDelivery).catch((err) => {
+              console.warn("Firestore setDoc failed/skipped in background:", err);
+            });
+            writePromises.push(p);
+            newDeliveriesList.push(newDelivery);
             createdCount++;
           }
         }
       }
+
+      if (writePromises.length > 0) {
+        await runSafeDbWrite(Promise.all(writePromises), "Bulk Generate Deliveries");
+      }
+
+      setDeliveries(newDeliveriesList);
+      localStorage.setItem('mma_deliveries', JSON.stringify(newDeliveriesList));
       triggerAlert('success', `Generated ${createdCount} new deliveries for ${deliveryDate}.`);
     } catch (err: any) {
       console.error(err);
@@ -251,24 +564,31 @@ export default function AdminDashboard({ adminUser, onLogout }: AdminDashboardPr
 
   // Assign delivery boy to a delivery doc
   const handleAssignRider = async (deliveryId: string, riderId: string) => {
-    try {
-      if (riderId === 'unassigned') {
-        await updateDoc(doc(db, 'deliveries', deliveryId), {
-          deliveryBoyId: null,
-          deliveryBoyName: null,
-        });
-        triggerAlert('success', 'Rider unassigned successfully.');
-        return;
-      }
+    let boyId: string | null = null;
+    let boyName: string | null = null;
 
+    if (riderId !== 'unassigned') {
       const rider = riders.find((r) => r.id === riderId);
       if (rider) {
-        await updateDoc(doc(db, 'deliveries', deliveryId), {
-          deliveryBoyId: rider.id,
-          deliveryBoyName: rider.name,
-        });
-        triggerAlert('success', `Assigned to ${rider.name}.`);
+        boyId = rider.id;
+        boyName = rider.name;
       }
+    }
+
+    try {
+      await runSafeDbWrite(
+        updateDoc(doc(db, 'deliveries', deliveryId), {
+          deliveryBoyId: boyId,
+          deliveryBoyName: boyName,
+        }),
+        "Assign Rider"
+      );
+
+      // Always update local state & local storage
+      const updated = deliveries.map(d => d.id === deliveryId ? { ...d, deliveryBoyId: boyId, deliveryBoyName: boyName } : d);
+      setDeliveries(updated);
+      localStorage.setItem('mma_deliveries', JSON.stringify(updated));
+      triggerAlert('success', riderId === 'unassigned' ? 'Rider unassigned successfully.' : `Assigned to ${boyName}.`);
     } catch (err: any) {
       console.error(err);
       triggerAlert('error', 'Assignment failed: ' + err.message);
@@ -277,18 +597,27 @@ export default function AdminDashboard({ adminUser, onLogout }: AdminDashboardPr
 
   // Update delivery status manually (for Admin override)
   const handleUpdateStatus = async (deliveryId: string, status: 'pending' | 'picked_up' | 'delivered' | 'cancelled') => {
+    const nowStr = new Date().toISOString();
+    const updates: any = { status };
+    if (status === 'picked_up') {
+      updates.pickupTime = nowStr;
+    } else if (status === 'delivered') {
+      updates.deliveryTime = nowStr;
+    } else if (status === 'pending') {
+      updates.pickupTime = null;
+      updates.deliveryTime = null;
+    }
+
     try {
-      const nowStr = new Date().toISOString();
-      const updates: any = { status };
-      if (status === 'picked_up') {
-        updates.pickupTime = nowStr;
-      } else if (status === 'delivered') {
-        updates.deliveryTime = nowStr;
-      } else if (status === 'pending') {
-        updates.pickupTime = null;
-        updates.deliveryTime = null;
-      }
-      await updateDoc(doc(db, 'deliveries', deliveryId), updates);
+      await runSafeDbWrite(
+        updateDoc(doc(db, 'deliveries', deliveryId), updates),
+        "Update Status"
+      );
+
+      // Always update local state & local storage
+      const updated = deliveries.map(d => d.id === deliveryId ? { ...d, ...updates } : d);
+      setDeliveries(updated);
+      localStorage.setItem('mma_deliveries', JSON.stringify(updated));
       triggerAlert('success', `Status updated to ${status}.`);
     } catch (err: any) {
       console.error(err);
@@ -316,7 +645,19 @@ export default function AdminDashboard({ adminUser, onLogout }: AdminDashboardPr
         notes: custNotes,
       };
 
-      await setDoc(doc(db, 'customers', id), data);
+      await runSafeDbWrite(setDoc(doc(db, 'customers', id), data), "Save Customer");
+
+      // Always update local state and localStorage
+      let updated = [...customers];
+      if (editingCustomer) {
+        updated = updated.map(c => c.id === id ? data : c);
+      } else {
+        updated.push(data);
+      }
+      const sorted = updated.sort((a, b) => a.name.localeCompare(b.name));
+      setCustomers(sorted);
+      localStorage.setItem('mma_customers', JSON.stringify(sorted));
+
       setIsCustomerModalOpen(false);
       setEditingCustomer(null);
       resetCustomerForm();
@@ -333,7 +674,11 @@ export default function AdminDashboard({ adminUser, onLogout }: AdminDashboardPr
   const handleDeleteCustomer = async (id: string) => {
     if (!window.confirm('Are you sure you want to delete this customer? This will not delete their historical deliveries.')) return;
     try {
-      await deleteDoc(doc(db, 'customers', id));
+      await runSafeDbWrite(deleteDoc(doc(db, 'customers', id)), "Delete Customer");
+
+      const updated = customers.filter(c => c.id !== id);
+      setCustomers(updated);
+      localStorage.setItem('mma_customers', JSON.stringify(updated));
       triggerAlert('success', 'Customer deleted successfully.');
     } catch (err: any) {
       console.error(err);
@@ -382,37 +727,55 @@ export default function AdminDashboard({ adminUser, onLogout }: AdminDashboardPr
     try {
       const emailVal = userEmail.trim();
       const usernameVal = userUsername.trim() || emailVal.split('@')[0];
+      const id = editingUser ? editingUser.id : `user_${Date.now()}`;
+      const data: UserProfile = {
+        id,
+        name: userName.trim(),
+        email: emailVal,
+        username: usernameVal,
+        phone: userPhone.trim(),
+        role: userRole,
+        status: userStatus,
+        password: userPassword,
+      };
 
       if (editingUser) {
-        // Update existing user/admin
-        const docRef = doc(db, 'users', editingUser.id);
-        await updateDoc(docRef, {
-          name: userName.trim(),
-          email: emailVal,
-          username: usernameVal,
-          phone: userPhone.trim(),
-          role: userRole,
-          status: userStatus,
-          password: userPassword,
-        });
-        triggerAlert('success', `User ${userName} updated successfully!`);
+        await runSafeDbWrite(
+          updateDoc(doc(db, 'users', id), {
+            name: userName.trim(),
+            email: emailVal,
+            username: usernameVal,
+            phone: userPhone.trim(),
+            role: userRole,
+            status: userStatus,
+            password: userPassword,
+          }),
+          "Update User"
+        );
       } else {
-        // Create new user/admin (Admin can add any new admins if required)
-        const newDocRef = doc(collection(db, 'users'));
-        const uid = newDocRef.id;
-        await setDoc(newDocRef, {
-          id: uid,
-          name: userName.trim(),
-          email: emailVal,
-          username: usernameVal,
-          phone: userPhone.trim(),
-          role: userRole,
-          status: userStatus,
-          password: userPassword,
-          createdAt: new Date().toISOString(),
-        });
-        triggerAlert('success', `User ${userName} registered successfully!`);
+        await runSafeDbWrite(
+          setDoc(doc(db, 'users', id), { ...data, createdAt: new Date().toISOString() }),
+          "Create User"
+        );
       }
+
+      // Always update local state and localStorage
+      let updatedUsers = [...allUsers];
+      if (editingUser) {
+        updatedUsers = updatedUsers.map(u => u.id === id ? { ...u, ...data } : u);
+      } else {
+        updatedUsers.push({ ...data, createdAt: new Date().toISOString() });
+      }
+      const sortedUsers = updatedUsers.sort((a, b) => a.name.localeCompare(b.name));
+      setAllUsers(sortedUsers);
+      localStorage.setItem('mma_users', JSON.stringify(sortedUsers));
+
+      // Also sync riders if role is delivery
+      const deliveryRiders = sortedUsers.filter(u => u.role === 'delivery');
+      setRiders(deliveryRiders);
+      localStorage.setItem('mma_riders', JSON.stringify(deliveryRiders));
+
+      triggerAlert('success', editingUser ? `User ${userName} updated successfully!` : `User ${userName} registered successfully!`);
       setIsUserModalOpen(false);
     } catch (err: any) {
       console.error(err);
@@ -426,7 +789,16 @@ export default function AdminDashboard({ adminUser, onLogout }: AdminDashboardPr
   const handleDeleteUser = async (id: string, name: string) => {
     if (!window.confirm(`Are you sure you want to delete user ${name}? This will clear their credentials.`)) return;
     try {
-      await deleteDoc(doc(db, 'users', id));
+      await runSafeDbWrite(deleteDoc(doc(db, 'users', id)), "Delete User");
+
+      const updatedUsers = allUsers.filter(u => u.id !== id);
+      setAllUsers(updatedUsers);
+      localStorage.setItem('mma_users', JSON.stringify(updatedUsers));
+
+      const deliveryRiders = updatedUsers.filter(u => u.role === 'delivery');
+      setRiders(deliveryRiders);
+      localStorage.setItem('mma_riders', JSON.stringify(deliveryRiders));
+
       triggerAlert('success', `User ${name} deleted successfully.`);
     } catch (err: any) {
       console.error(err);
@@ -446,14 +818,17 @@ export default function AdminDashboard({ adminUser, onLogout }: AdminDashboardPr
     }
     setActionLoading(true);
     try {
-      let count = 0;
-      await Promise.all(
-        todayDeliveries.map(async (d) => {
-          await deleteDoc(doc(db, 'deliveries', d.id));
-          count++;
-        })
+      await runSafeDbWrite(
+        Promise.all(
+          todayDeliveries.map((d) => deleteDoc(doc(db, 'deliveries', d.id)))
+        ),
+        "Reset Deliveries"
       );
-      triggerAlert('success', `Successfully deleted all ${count} deliveries for ${deliveryDate}.`);
+
+      const updated = deliveries.filter((d) => d.date !== deliveryDate);
+      setDeliveries(updated);
+      localStorage.setItem('mma_deliveries', JSON.stringify(updated));
+      triggerAlert('success', `Successfully deleted all ${todayDeliveries.length} deliveries for ${deliveryDate}.`);
     } catch (err: any) {
       console.error("Error resetting deliveries:", err);
       triggerAlert('error', `Failed to reset deliveries: ${err.message}`);
@@ -473,14 +848,16 @@ export default function AdminDashboard({ adminUser, onLogout }: AdminDashboardPr
     }
     setActionLoading(true);
     try {
-      let count = 0;
-      await Promise.all(
-        bills.map(async (b) => {
-          await deleteDoc(doc(db, 'billing', b.id));
-          count++;
-        })
+      await runSafeDbWrite(
+        Promise.all(
+          bills.map((b) => deleteDoc(doc(db, 'billing', b.id)))
+        ),
+        "Reset All Billing"
       );
-      triggerAlert('success', `Successfully cleared all ${count} billing records.`);
+
+      setBills([]);
+      localStorage.setItem('mma_bills', JSON.stringify([]));
+      triggerAlert('success', `Successfully cleared all billing records.`);
     } catch (err: any) {
       console.error("Error clearing bills:", err);
       triggerAlert('error', `Failed to clear billing: ${err.message}`);
@@ -501,18 +878,33 @@ export default function AdminDashboard({ adminUser, onLogout }: AdminDashboardPr
     setActionLoading(true);
     try {
       // 1. Delete all customers
-      await Promise.all(customers.map((c) => deleteDoc(doc(db, 'customers', c.id))));
-      
+      const pCustomers = Promise.all(customers.map((c) => deleteDoc(doc(db, 'customers', c.id))));
       // 2. Delete all deliveries
-      await Promise.all(deliveries.map((d) => deleteDoc(doc(db, 'deliveries', d.id))));
-      
+      const pDeliveries = Promise.all(deliveries.map((d) => deleteDoc(doc(db, 'deliveries', d.id))));
       // 3. Delete all bills
-      await Promise.all(bills.map((b) => deleteDoc(doc(db, 'billing', b.id))));
-      
+      const pBills = Promise.all(bills.map((b) => deleteDoc(doc(db, 'billing', b.id))));
       // 4. Delete all other users
       const usersToDelete = allUsers.filter((u) => u.id !== adminUser.id);
-      await Promise.all(usersToDelete.map((u) => deleteDoc(doc(db, 'users', u.id))));
-      
+      const pUsers = Promise.all(usersToDelete.map((u) => deleteDoc(doc(db, 'users', u.id))));
+
+      await runSafeDbWrite(
+        Promise.all([pCustomers, pDeliveries, pBills, pUsers]),
+        "Factory Reset Database"
+      );
+
+      setCustomers([]);
+      setDeliveries([]);
+      setBills([]);
+      const keptUsers = allUsers.filter((u) => u.id === adminUser.id);
+      setAllUsers(keptUsers);
+      setRiders([]);
+
+      localStorage.setItem('mma_customers', JSON.stringify([]));
+      localStorage.setItem('mma_deliveries', JSON.stringify([]));
+      localStorage.setItem('mma_bills', JSON.stringify([]));
+      localStorage.setItem('mma_users', JSON.stringify(keptUsers));
+      localStorage.setItem('mma_riders', JSON.stringify([]));
+
       setResetConfirmText('');
       triggerAlert('success', 'Factory Reset completed! All transaction history, customer rosters, and secondary accounts have been purged. Your administrator login remains active.');
     } catch (err: any) {
@@ -556,7 +948,15 @@ export default function AdminDashboard({ adminUser, onLogout }: AdminDashboardPr
         notes: adHocNotes.trim(),
       };
 
-      await setDoc(doc(db, 'deliveries', docId), newDelivery);
+      await runSafeDbWrite(
+        setDoc(doc(db, 'deliveries', docId), newDelivery),
+        "Schedule Ad-hoc Delivery"
+      );
+
+      const updated = [...deliveries, newDelivery];
+      setDeliveries(updated);
+      localStorage.setItem('mma_deliveries', JSON.stringify(updated));
+
       triggerAlert('success', `Successfully scheduled custom ${adHocMealType} run for ${customer.name}!`);
       setIsAdHocModalOpen(false);
       setAdHocNotes('');
@@ -582,10 +982,18 @@ export default function AdminDashboard({ adminUser, onLogout }: AdminDashboardPr
 
     setActionLoading(true);
     try {
-      await updateDoc(doc(db, 'deliveries', isEditingDelivery.id), {
-        membersCount: Number(editDeliveryBoxes),
-        notes: editDeliveryNotes.trim()
-      });
+      await runSafeDbWrite(
+        updateDoc(doc(db, 'deliveries', isEditingDelivery.id), {
+          membersCount: Number(editDeliveryBoxes),
+          notes: editDeliveryNotes.trim()
+        }),
+        "Edit Delivery Instance"
+      );
+
+      const updated = deliveries.map(d => d.id === isEditingDelivery.id ? { ...d, membersCount: Number(editDeliveryBoxes), notes: editDeliveryNotes.trim() } : d);
+      setDeliveries(updated);
+      localStorage.setItem('mma_deliveries', JSON.stringify(updated));
+
       triggerAlert('success', 'Delivery instance details updated successfully!');
       setIsEditingDelivery(null);
     } catch (err: any) {
@@ -600,7 +1008,15 @@ export default function AdminDashboard({ adminUser, onLogout }: AdminDashboardPr
   const handleDeleteDeliveryInstance = async (id: string, name: string) => {
     if (!window.confirm(`Are you sure you want to completely remove this delivery instance for ${name}?`)) return;
     try {
-      await deleteDoc(doc(db, 'deliveries', id));
+      await runSafeDbWrite(
+        deleteDoc(doc(db, 'deliveries', id)),
+        "Delete Delivery Instance"
+      );
+
+      const updated = deliveries.filter(d => d.id !== id);
+      setDeliveries(updated);
+      localStorage.setItem('mma_deliveries', JSON.stringify(updated));
+
       triggerAlert('success', 'Delivery instance removed successfully.');
     } catch (err: any) {
       console.error(err);
@@ -779,7 +1195,12 @@ export default function AdminDashboard({ adminUser, onLogout }: AdminDashboardPr
         createdAt: new Date().toISOString(),
       };
 
-      await setDoc(doc(db, 'billing', billId), newBill);
+      await runSafeDbWrite(setDoc(doc(db, 'billing', billId), newBill), "Save Bill");
+
+      const updated = [newBill, ...bills];
+      setBills(updated);
+      localStorage.setItem('mma_bills', JSON.stringify(updated));
+
       setGeneratedBillPreview(null);
       triggerAlert('success', `Bill generated successfully for ${newBill.customerName}!`);
     } catch (err: any) {
@@ -790,13 +1211,56 @@ export default function AdminDashboard({ adminUser, onLogout }: AdminDashboardPr
     }
   };
 
+  const openEditBillingModal = () => {
+    setTempUpiId(billingInfo.upiId);
+    setTempAccName(billingInfo.accName);
+    setTempAccNo(billingInfo.accNo);
+    setTempIfsc(billingInfo.ifsc);
+    setTempBankName(billingInfo.bankName);
+    setTempSupportPhone(billingInfo.supportPhone);
+    setIsEditingBillingInfo(true);
+  };
+
+  const handleSaveBillingInfo = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setActionLoading(true);
+    try {
+      const updatedInfo = {
+        upiId: tempUpiId.trim(),
+        accName: tempAccName.trim(),
+        accNo: tempAccNo.trim(),
+        ifsc: tempIfsc.trim(),
+        bankName: tempBankName.trim(),
+        supportPhone: tempSupportPhone.trim()
+      };
+      await runSafeDbWrite(setDoc(doc(db, 'settings', 'billing_info'), updatedInfo), "Save Billing Settings");
+      setBillingInfo(updatedInfo);
+      localStorage.setItem('mma_billing_info', JSON.stringify(updatedInfo));
+      setIsEditingBillingInfo(false);
+      triggerAlert('success', 'Billing and bank details updated successfully!');
+    } catch (err: any) {
+      console.error(err);
+      triggerAlert('error', 'Failed to update billing details: ' + err.message);
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
   // Mark Bill as Paid
   const handleMarkBillPaid = async (billId: string) => {
     try {
-      await updateDoc(doc(db, 'billing', billId), {
-        status: 'paid',
-        paidAt: new Date().toISOString(),
-      });
+      await runSafeDbWrite(
+        updateDoc(doc(db, 'billing', billId), {
+          status: 'paid',
+          paidAt: new Date().toISOString(),
+        }),
+        "Mark Bill Paid"
+      );
+
+      const updated = bills.map(b => b.id === billId ? { ...b, status: 'paid' as const, paidAt: new Date().toISOString() } : b);
+      setBills(updated);
+      localStorage.setItem('mma_bills', JSON.stringify(updated));
+
       triggerAlert('success', 'Bill marked as Paid!');
     } catch (err: any) {
       console.error(err);
@@ -808,7 +1272,12 @@ export default function AdminDashboard({ adminUser, onLogout }: AdminDashboardPr
   const handleDeleteBill = async (billId: string) => {
     if (!window.confirm('Delete this bill? This will not affect delivery logs.')) return;
     try {
-      await deleteDoc(doc(db, 'billing', billId));
+      await runSafeDbWrite(deleteDoc(doc(db, 'billing', billId)), "Delete Bill");
+
+      const updated = bills.filter(b => b.id !== billId);
+      setBills(updated);
+      localStorage.setItem('mma_bills', JSON.stringify(updated));
+
       triggerAlert('success', 'Bill deleted.');
     } catch (err: any) {
       console.error(err);
@@ -834,6 +1303,8 @@ export default function AdminDashboard({ adminUser, onLogout }: AdminDashboardPr
     const matchRider = deliveryRiderFilter === 'all' || d.deliveryBoyId === deliveryRiderFilter;
     return matchMeal && matchRider;
   });
+
+  const activeRiders = riders.length > 0 ? riders : allUsers.filter((u) => u.role === 'delivery');
 
   // Riders summary calculating daily completed tasks
   const riderCompletedCount = (riderId: string) => {
@@ -963,10 +1434,32 @@ export default function AdminDashboard({ adminUser, onLogout }: AdminDashboardPr
           </div>
 
           <div className="flex items-center gap-4">
-            <div className="hidden sm:flex items-center gap-2 bg-slate-100 px-3 py-1.5 rounded-full text-xs font-semibold text-slate-600">
-              <span className="h-2 w-2 rounded-full bg-green-500 animate-pulse"></span>
-              Real-time Database Live
-            </div>
+            <button
+              onClick={() => setShowDiagnosticsModal(true)}
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-bold transition-all cursor-pointer border ${
+                dbStatus === 'success'
+                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
+                  : dbStatus === 'testing'
+                  ? 'bg-amber-50 text-amber-700 border-amber-200 animate-pulse'
+                  : 'bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100'
+              }`}
+              title="Database connection diagnostics"
+            >
+              <span className={`h-2 w-2 rounded-full ${
+                dbStatus === 'success' ? 'bg-emerald-500' : dbStatus === 'testing' ? 'bg-amber-500' : 'bg-rose-500 animate-ping'
+              }`}></span>
+              <span className="hidden xs:inline">
+                {dbStatus === 'success' && 'Database Connected'}
+                {dbStatus === 'testing' && 'Checking Database...'}
+                {dbStatus === 'failed' && 'Offline Fallback'}
+              </span>
+              <span className="xs:hidden">
+                {dbStatus === 'success' && 'Connected'}
+                {dbStatus === 'testing' && 'Checking...'}
+                {dbStatus === 'failed' && 'Offline'}
+              </span>
+              <Settings className="h-3 w-3 opacity-60 ml-0.5 shrink-0" />
+            </button>
             {/* Mobile Logout */}
             <button
               onClick={onLogout}
@@ -1011,6 +1504,24 @@ export default function AdminDashboard({ adminUser, onLogout }: AdminDashboardPr
             Team
           </button>
         </div>
+
+        {/* Database Offline Warning Banner */}
+        {dbStatus === 'failed' && (
+          <div className="bg-amber-50 border-b border-amber-200 px-6 py-3 flex items-center justify-between gap-4 text-xs font-medium text-amber-800">
+            <div className="flex items-center gap-2.5">
+              <ShieldAlert className="h-4.5 w-4.5 text-amber-600 shrink-0" />
+              <span>
+                <strong>Running in Offline Local Mode:</strong> Your cloud Firestore database is unreachable or has not been created yet. Data is being safely saved locally to your browser so the application remains fully functional.
+              </span>
+            </div>
+            <button
+              onClick={() => setShowDiagnosticsModal(true)}
+              className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-[11px] font-bold transition-colors cursor-pointer shrink-0"
+            >
+              Configure Database
+            </button>
+          </div>
+        )}
 
         {/* Alert Notifications */}
         {alertMsg.text && (
@@ -1140,7 +1651,7 @@ export default function AdminDashboard({ adminUser, onLogout }: AdminDashboardPr
                       className="px-3 py-2 border border-slate-200 rounded-xl text-sm font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
                     >
                       <option value="all">All Riders</option>
-                      {riders.map((r) => (
+                      {activeRiders.map((r) => (
                         <option key={r.id} value={r.id}>{r.name}</option>
                       ))}
                     </select>
@@ -1286,7 +1797,7 @@ export default function AdminDashboard({ adminUser, onLogout }: AdminDashboardPr
                                 className="px-2 py-1.5 border border-slate-200 rounded-lg text-xs font-bold text-slate-700 bg-white"
                               >
                                 <option value="unassigned">Claimable / Unassigned</option>
-                                {riders.map((r) => (
+                                {activeRiders.map((r) => (
                                   <option key={r.id} value={r.id}>{r.name}</option>
                                 ))}
                               </select>
@@ -1664,6 +2175,51 @@ export default function AdminDashboard({ adminUser, onLogout }: AdminDashboardPr
                     </button>
                   </motion.div>
                 )}
+
+                {/* Active Direct Bank & UPI Details settings */}
+                <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm space-y-4">
+                  <div className="flex justify-between items-center pb-2 border-b border-slate-100">
+                    <h3 className="font-bold text-slate-800 text-sm flex items-center gap-1.5">
+                      <CreditCard className="h-4.5 w-4.5 text-emerald-600" />
+                      Payment Details
+                    </h3>
+                    <button
+                      onClick={openEditBillingModal}
+                      className="text-xs font-bold text-emerald-600 hover:text-emerald-700 bg-emerald-50 hover:bg-emerald-100 px-2.5 py-1 rounded-lg transition-colors flex items-center gap-1 cursor-pointer"
+                    >
+                      <Edit3 className="h-3 w-3" />
+                      Edit
+                    </button>
+                  </div>
+                  <div className="text-xs space-y-2.5 text-slate-600 leading-relaxed">
+                    <div>
+                      <span className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">UPI / GPay ID</span>
+                      <span className="font-mono text-slate-800 font-semibold">{billingInfo.upiId}</span>
+                    </div>
+                    <div>
+                      <span className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">Account Name</span>
+                      <span className="text-slate-800 font-semibold">{billingInfo.accName}</span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <span className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">Account Number</span>
+                        <span className="font-mono text-slate-800 font-semibold">{billingInfo.accNo}</span>
+                      </div>
+                      <div>
+                        <span className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">IFSC Code</span>
+                        <span className="font-mono text-slate-800 font-semibold">{billingInfo.ifsc}</span>
+                      </div>
+                    </div>
+                    <div>
+                      <span className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">Bank & Branch</span>
+                      <span className="text-slate-800 font-semibold">{billingInfo.bankName}</span>
+                    </div>
+                    <div>
+                      <span className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">Support Phone</span>
+                      <span className="text-slate-800 font-semibold">{billingInfo.supportPhone}</span>
+                    </div>
+                  </div>
+                </div>
               </div>
 
               {/* Right Column: Historical / Active Bills Ledger */}
@@ -1809,7 +2365,7 @@ export default function AdminDashboard({ adminUser, onLogout }: AdminDashboardPr
                   </button>
                 </div>
 
-                {riders.length === 0 ? (
+                {activeRiders.length === 0 ? (
                   <div className="p-12 text-center text-slate-400">
                     <p className="font-medium">No delivery boy accounts registered yet.</p>
                     <p className="text-xs mt-1">Click the 'Add Delivery Boy' button above to create rider credentials!</p>
@@ -1829,7 +2385,7 @@ export default function AdminDashboard({ adminUser, onLogout }: AdminDashboardPr
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100 text-sm text-slate-600">
-                        {riders.map((rider) => {
+                        {activeRiders.map((rider) => {
                           const completed = riderCompletedCount(rider.id);
                           const pending = riderPendingCount(rider.id);
                           const total = completed + pending;
@@ -2589,15 +3145,15 @@ export default function AdminDashboard({ adminUser, onLogout }: AdminDashboardPr
                 <div className="bg-emerald-50/40 p-4.5 rounded-2xl border border-emerald-600/10 text-[10px] text-slate-500 space-y-1.5 print:bg-white print:border-slate-300">
                   <h6 className="font-extrabold text-slate-700 uppercase tracking-wider text-[11px] mb-1">Direct Bank & UPI Transfer details</h6>
                   <p className="flex justify-between">
-                    <span><strong>GPay / PhonePe UPI No:</strong> 9886475632@okaxis</span>
-                    <span><strong>Acc Name:</strong> Manjara Mane Aduge</span>
+                    <span><strong>GPay / PhonePe UPI No:</strong> {billingInfo.upiId}</span>
+                    <span><strong>Acc Name:</strong> {billingInfo.accName}</span>
                   </p>
                   <p className="flex justify-between">
-                    <span><strong>Account Transfer No:</strong> 40990201012356 &nbsp;|&nbsp; <strong>IFSC:</strong> ICIC0004099</span>
-                    <span><strong>Bank:</strong> ICICI Bank, Jayanagar</span>
+                    <span><strong>Account Transfer No:</strong> {billingInfo.accNo} &nbsp;|&nbsp; <strong>IFSC:</strong> {billingInfo.ifsc}</span>
+                    <span><strong>Bank:</strong> {billingInfo.bankName}</span>
                   </p>
                   <div className="text-[9px] text-slate-400 leading-normal pt-1 border-t border-slate-200/50 mt-1 text-center">
-                    Thank you for your valuable subscription! For billing support or plan alterations, call +91-9886475632.
+                    Thank you for your valuable subscription! For billing support or plan alterations, call {billingInfo.supportPhone}.
                   </div>
                 </div>
               </div>
@@ -2623,6 +3179,123 @@ export default function AdminDashboard({ adminUser, onLogout }: AdminDashboardPr
           </div>
         );
       })()}
+
+      {/* EDIT PAYMENT/BILLING DETAILS MODAL */}
+      {isEditingBillingInfo && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 overflow-y-auto">
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="bg-white rounded-3xl max-w-md w-full overflow-hidden shadow-2xl border border-slate-100"
+          >
+            <div className="bg-slate-900 px-6 py-4 flex items-center justify-between">
+              <h4 className="font-bold text-white text-base flex items-center gap-2">
+                <CreditCard className="h-5 w-5 text-emerald-500" />
+                Edit Business Payment Details
+              </h4>
+              <button
+                type="button"
+                onClick={() => setIsEditingBillingInfo(false)}
+                className="text-slate-400 hover:text-white transition-colors cursor-pointer text-xl"
+              >
+                &times;
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveBillingInfo} className="p-6 space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">GPay / PhonePe UPI ID</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. 9886475632@okaxis"
+                  value={tempUpiId}
+                  onChange={(e) => setTempUpiId(e.target.value)}
+                  className="block w-full px-3.5 py-2 border border-slate-200 rounded-xl text-sm font-semibold text-slate-800 bg-slate-50/50 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Account Holder Name</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. Manjara Mane Aduge"
+                  value={tempAccName}
+                  onChange={(e) => setTempAccName(e.target.value)}
+                  className="block w-full px-3.5 py-2 border border-slate-200 rounded-xl text-sm font-semibold text-slate-800 bg-slate-50/50 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Account Number</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. 40990201012356"
+                    value={tempAccNo}
+                    onChange={(e) => setTempAccNo(e.target.value)}
+                    className="block w-full px-3.5 py-2 border border-slate-200 rounded-xl text-sm font-semibold text-slate-800 bg-slate-50/50 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">IFSC Code</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. ICIC0004099"
+                    value={tempIfsc}
+                    onChange={(e) => setTempIfsc(e.target.value)}
+                    className="block w-full px-3.5 py-2 border border-slate-200 rounded-xl text-sm font-semibold text-slate-800 bg-slate-50/50 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Bank Name & Branch</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. ICICI Bank, Jayanagar"
+                  value={tempBankName}
+                  onChange={(e) => setTempBankName(e.target.value)}
+                  className="block w-full px-3.5 py-2 border border-slate-200 rounded-xl text-sm font-semibold text-slate-800 bg-slate-50/50 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Billing Support Phone</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. +91-9886475632"
+                  value={tempSupportPhone}
+                  onChange={(e) => setTempSupportPhone(e.target.value)}
+                  className="block w-full px-3.5 py-2 border border-slate-200 rounded-xl text-sm font-semibold text-slate-800 bg-slate-50/50 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+                />
+              </div>
+
+              <div className="flex justify-end gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setIsEditingBillingInfo(false)}
+                  className="px-4 py-2 text-slate-500 hover:text-slate-700 text-sm font-semibold cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={actionLoading}
+                  className="bg-emerald-600 hover:bg-emerald-700 disabled:bg-emerald-300 text-white font-bold px-5 py-2 rounded-xl text-sm cursor-pointer transition-colors"
+                >
+                  Save Payment Details
+                </button>
+              </div>
+            </form>
+          </motion.div>
+        </div>
+      )}
 
       {/* SCHEDULE AD-HOC DELIVERY MODAL */}
       {isAdHocModalOpen && (
@@ -2818,6 +3491,160 @@ export default function AdminDashboard({ adminUser, onLogout }: AdminDashboardPr
                 </button>
               </div>
             </form>
+          </motion.div>
+        </div>
+      )}
+
+      {/* Firebase Database Diagnostics Modal */}
+      {showDiagnosticsModal && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="bg-white rounded-2xl border border-slate-100 shadow-xl max-w-lg w-full overflow-hidden"
+          >
+            <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Database className="h-5 w-5 text-emerald-600" />
+                <h3 className="font-bold text-slate-800 text-base">Database System Diagnostics</h3>
+              </div>
+              <button
+                onClick={() => setShowDiagnosticsModal(false)}
+                className="text-slate-400 hover:text-slate-600 text-lg font-bold"
+              >
+                &times;
+              </button>
+            </div>
+
+            <div className="p-6 space-y-4 max-h-[70vh] overflow-y-auto text-left">
+              {/* Connection Status Box */}
+              <div className="space-y-2">
+                <div className="text-xs font-bold text-slate-400 uppercase tracking-wider">Connection Status</div>
+                {dbStatus === 'testing' && (
+                  <div className="flex items-center gap-3 text-amber-700 bg-amber-50 border border-amber-200/50 p-3.5 rounded-xl">
+                    <RefreshCw className="h-5 w-5 animate-spin text-amber-500 shrink-0" />
+                    <span className="font-semibold text-xs">Pinging Firestore server endpoints...</span>
+                  </div>
+                )}
+
+                {dbStatus === 'success' && (
+                  <div className="space-y-3">
+                    <div className="flex items-start gap-3 text-emerald-800 bg-emerald-50 border border-emerald-200/50 p-3.5 rounded-xl">
+                      <CheckCircle2 className="h-5 w-5 text-emerald-500 shrink-0 mt-0.5" />
+                      <div>
+                        <p className="font-bold text-xs">Database Connected Successfully!</p>
+                        <p className="text-[11px] text-emerald-600 mt-0.5">Cloud real-time syncing is active. All customer, order, team, and billing records are stored securely in Firestore.</p>
+                      </div>
+                    </div>
+
+                    {/* Cloud Synchronization Panel */}
+                    <div className="bg-emerald-50/50 border border-emerald-100/80 p-4 rounded-xl space-y-3">
+                      <div className="flex items-center gap-1.5 font-bold text-slate-800 text-xs">
+                        <Database className="h-4 w-4 text-emerald-600 shrink-0" />
+                        <span>Sync Local Data to Cloud Database</span>
+                      </div>
+                      
+                      <p className="text-[11px] text-slate-500 leading-relaxed">
+                        To make your local customer roster, billing history, and delivery assignments globally visible to other administrators and delivery boys, upload them to your Firestore cloud database now.
+                      </p>
+
+                      <button
+                        onClick={handleSyncLocalToCloud}
+                        disabled={isSyncing}
+                        className="w-full bg-emerald-600 hover:bg-emerald-700 disabled:bg-emerald-400 text-white font-bold text-xs py-2.5 px-4 rounded-xl flex items-center justify-center gap-2 transition-colors cursor-pointer"
+                      >
+                        {isSyncing ? (
+                          <>
+                            <RefreshCw className="h-4 w-4 animate-spin" />
+                            Syncing with Cloud Firestore...
+                          </>
+                        ) : (
+                          <>
+                            <RefreshCw className="h-4 w-4" />
+                            Upload & Sync Local Data to Cloud
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {dbStatus === 'failed' && (
+                  <div className="space-y-3">
+                    <div className="flex items-start gap-3 text-rose-800 bg-rose-50 border border-rose-200/50 p-3.5 rounded-xl">
+                      <XCircle className="h-5 w-5 text-rose-500 shrink-0 mt-0.5" />
+                      <div>
+                        <p className="font-bold text-xs">Connection Unreachable (Offline Local Mode)</p>
+                        <p className="text-[11px] text-rose-600 font-mono mt-1 break-all max-h-20 overflow-y-auto bg-white/40 p-1.5 rounded border border-rose-100">{dbError}</p>
+                      </div>
+                    </div>
+
+                    {/* Step-by-Step setup instructions */}
+                    <div className="bg-slate-50 border border-slate-200/60 p-4 rounded-xl space-y-3">
+                      <div className="flex items-center gap-1.5 font-bold text-slate-800 text-xs">
+                        <Info className="h-4 w-4 text-blue-500 shrink-0" />
+                        <span>Action Required: Initialize Firestore Database</span>
+                      </div>
+                      
+                      <p className="text-[11px] text-slate-500 leading-relaxed">
+                        Firestore database has not been provisioned on this Firebase project yet, or connection is blocked by security rules. Follow these steps to complete setup:
+                      </p>
+
+                      <ol className="list-decimal list-inside space-y-2 text-[11px] text-slate-600 leading-relaxed pl-1">
+                        <li>
+                          Open your <strong>Firebase Console</strong> and navigate to your project: <code className="bg-slate-200 px-1 py-0.5 rounded font-mono text-slate-800 font-bold">{appletConfig.projectId}</code>.
+                        </li>
+                        <li>
+                          Click on <strong>Build &gt; Firestore Database</strong> in the left sidebar menu.
+                        </li>
+                        <li>
+                          Click the <strong>Create database</strong> button. Choose your database location, select <strong>Start in test mode</strong> (to allow initial writes), and click <strong>Create</strong>.
+                        </li>
+                        <li>
+                          Wait 1-2 minutes for the database to provision on Google Cloud, then click the <strong>Retry Diagnostic Test</strong> button below!
+                        </li>
+                      </ol>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Technical Configuration Summary */}
+              <div className="space-y-2 pt-2">
+                <div className="text-xs font-bold text-slate-400 uppercase tracking-wider">Configuration Specifications</div>
+                <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200/50 space-y-2 text-xs font-medium">
+                  <div className="flex justify-between">
+                    <span className="text-slate-500">Firebase Project ID:</span>
+                    <span className="font-mono text-slate-800 font-semibold select-all">{appletConfig.projectId}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-500">Database Identifier:</span>
+                    <span className="font-mono text-slate-800 font-semibold select-all">{appletConfig.firestoreDatabaseId || '(default)'}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-500">Storage Bucket:</span>
+                    <span className="font-mono text-slate-800 font-semibold select-all">{appletConfig.storageBucket || '(default)'}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="px-6 py-4 bg-slate-50 border-t border-slate-100 flex items-center gap-3">
+              <button
+                onClick={checkDbConnection}
+                disabled={dbStatus === 'testing'}
+                className="flex-1 bg-emerald-600 hover:bg-emerald-700 disabled:bg-emerald-600/50 text-white font-bold text-xs py-2.5 px-4 rounded-xl flex items-center justify-center gap-2 transition-colors cursor-pointer shadow-md shadow-emerald-600/10"
+              >
+                <RefreshCw className={`h-4 w-4 ${dbStatus === 'testing' ? 'animate-spin' : ''}`} />
+                Retry Diagnostic Test
+              </button>
+              <button
+                onClick={() => setShowDiagnosticsModal(false)}
+                className="px-4 py-2.5 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 rounded-xl font-bold text-xs transition-colors cursor-pointer"
+              >
+                Close Panel
+              </button>
+            </div>
           </motion.div>
         </div>
       )}

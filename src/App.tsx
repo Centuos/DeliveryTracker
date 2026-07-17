@@ -14,37 +14,58 @@ interface UserSession {
 }
 
 export default function App() {
-  const [session, setSession] = useState<UserSession | null>(null);
+  const [session, setSession] = useState<UserSession | null>(() => {
+    const cached = localStorage.getItem('mma_session');
+    return cached ? JSON.parse(cached) : null;
+  });
   const [authLoading, setAuthLoading] = useState(true);
 
   useEffect(() => {
     // Listen for authentication state changes
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
-      setAuthLoading(true);
       if (firebaseUser) {
         try {
           // Fetch user profile from firestore database
           const userDoc = await getDoc(doc(db, 'users', firebaseUser.uid));
           if (userDoc.exists()) {
             const userData = userDoc.data();
-            setSession({
+            const userSession: UserSession = {
               id: firebaseUser.uid,
               role: userData.role,
               name: userData.name || 'User',
-            });
+            };
+            setSession(userSession);
+            localStorage.setItem('mma_session', JSON.stringify(userSession));
           } else {
-            // No profile document found
-            console.warn('Authenticated user does not have a database profile. Logging out.');
+            // Check if we have a local session before logging out
+            if (!localStorage.getItem('mma_session')) {
+              console.warn('Authenticated user does not have a database profile. Logging out.');
+              await signOut(auth);
+              setSession(null);
+            }
+          }
+        } catch (err) {
+          console.error('Error loading user profile from database, using cached local session if available:', err);
+          // Do not force log out if we already have a valid local session
+          if (!localStorage.getItem('mma_session')) {
             await signOut(auth);
             setSession(null);
           }
-        } catch (err) {
-          console.error('Error loading user profile:', err);
-          await signOut(auth);
-          setSession(null);
         }
       } else {
-        setSession(null);
+        // If firebase auth has no user, but we have a custom Admin bypass login, preserve it
+        const cached = localStorage.getItem('mma_session');
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (parsed.id === 'admin_default_uid' || parsed.id === 'rider_1' || parsed.id === 'rider_2') {
+            setSession(parsed);
+          } else {
+            setSession(null);
+            localStorage.removeItem('mma_session');
+          }
+        } else {
+          setSession(null);
+        }
       }
       setAuthLoading(false);
     });
@@ -54,12 +75,14 @@ export default function App() {
 
   const handleLoginSuccess = (userSession: UserSession) => {
     setSession(userSession);
+    localStorage.setItem('mma_session', JSON.stringify(userSession));
   };
 
   const handleLogout = async () => {
     try {
-      await signOut(auth);
+      localStorage.removeItem('mma_session');
       setSession(null);
+      await signOut(auth);
     } catch (err) {
       console.error('Error logging out:', err);
     }

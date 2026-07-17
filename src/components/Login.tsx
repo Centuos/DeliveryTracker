@@ -1,9 +1,10 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { auth, db } from '../lib/firebase';
 import { signInWithEmailAndPassword } from 'firebase/auth';
-import { doc, setDoc, getDoc, collection, query, where, getDocs, updateDoc } from 'firebase/firestore';
+import { doc, setDoc, getDoc, collection, query, where, getDocs, updateDoc, getDocFromServer } from 'firebase/firestore';
 import { motion } from 'motion/react';
-import { ChefHat, LogIn, Lock, Mail, ShieldAlert } from 'lucide-react';
+import { ChefHat, LogIn, Lock, Mail, ShieldAlert, Database, Wifi, WifiOff, CheckCircle2, XCircle, Info, ExternalLink, Settings, RefreshCw, HelpCircle } from 'lucide-react';
+import appletConfig from '../../firebase-applet-config.json';
 
 interface LoginProps {
   onLoginSuccess: (user: { id: string; role: 'admin' | 'delivery'; name: string }) => void;
@@ -15,6 +16,8 @@ export default function Login({ onLoginSuccess }: LoginProps) {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
+
+
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
@@ -23,47 +26,55 @@ export default function Login({ onLoginSuccess }: LoginProps) {
     const inputVal = email.trim();
     const loginPassword = password;
 
-    // 1. Check for seeded Admin credentials first to boot up the app
-    if (inputVal.toLowerCase() === 'manjaramaneaduge' && loginPassword === 'Password@123') {
+    // 1. Check local storage / seeded users list first for the credentials!
+    // This allows instant login and use of the application even in full offline/unprovisioned mode.
+    const localUsersStr = localStorage.getItem('mma_users');
+    let localUsersList: any[] = [];
+    try {
+      localUsersList = localUsersStr ? JSON.parse(localUsersStr) : [];
+    } catch (e) {
+      console.warn("Failed to parse local users", e);
+    }
+    
+    // Always ensure master admin credentials are in the list for login fallback
+    const masterAdmin = { id: 'admin_default_uid', name: 'Manjara Mane Aduge Admin', email: 'manjaramaneaduge@manjaramane.com', role: 'admin', phone: '9999999999', status: 'active', username: 'manjaramaneaduge', password: 'Password@123' };
+    if (!Array.isArray(localUsersList) || localUsersList.length === 0 || !localUsersList.some((u: any) => u.username?.toLowerCase() === 'manjaramaneaduge')) {
+      localUsersList = [masterAdmin, ...(Array.isArray(localUsersList) ? localUsersList : [])];
+    }
+
+    const matchedLocal = localUsersList.find((u: any) => 
+      (u.username?.toLowerCase() === inputVal.toLowerCase() || u.email?.toLowerCase() === inputVal.toLowerCase()) && 
+      u.password === loginPassword
+    );
+
+    if (matchedLocal) {
       onLoginSuccess({
-        id: 'admin_default_uid',
-        role: 'admin',
-        name: 'Manjara Mane Aduge Admin',
+        id: matchedLocal.id,
+        role: matchedLocal.role as 'admin' | 'delivery',
+        name: matchedLocal.name,
       });
       setLoading(false);
 
-      // Attempt background database seed safely and completely asynchronously
+      // Attempt background Firestore sync safely in the background
       setTimeout(async () => {
         try {
-          const adminQ = query(collection(db, 'users'), where('email', '==', 'manjaramaneaduge@manjaramane.com'));
-          const adminSnapshot = await getDocs(adminQ);
-          
-          if (adminSnapshot.empty) {
-            const newAdminDoc = doc(collection(db, 'users'));
-            await setDoc(newAdminDoc, {
-              id: newAdminDoc.id,
-              name: 'Manjara Mane Aduge Admin',
-              email: 'manjaramaneaduge@manjaramane.com',
-              username: 'Manjaramaneaduge',
-              phone: '9999999999',
-              role: 'admin',
-              password: 'Password@123',
-              status: 'active',
-              createdAt: new Date().toISOString(),
-            });
-          } else {
-            const existingId = adminSnapshot.docs[0].id;
-            await updateDoc(doc(db, 'users', existingId), {
-              password: 'Password@123',
-              username: 'Manjaramaneaduge',
-              role: 'admin'
-            });
-          }
+          const userDocRef = doc(db, 'users', matchedLocal.id);
+          // Omit password from cloud document for security, but keep profile
+          const { password, ...safeUser } = matchedLocal;
+          await setDoc(userDocRef, { ...safeUser, createdAt: new Date().toISOString() });
+          console.log("Successfully seeded admin user in cloud Firestore users collection");
         } catch (dbErr) {
-          console.warn("Background admin seed skipped:", dbErr);
+          console.warn("Background user sync skipped:", dbErr);
         }
       }, 10);
       return;
+    }
+
+    function withTimeout<T>(promise: Promise<T>, ms: number, errorKey: string): Promise<T> {
+      return Promise.race([
+        promise,
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error(errorKey)), ms))
+      ]);
     }
 
     try {
@@ -73,18 +84,18 @@ export default function Login({ onLoginSuccess }: LoginProps) {
       const usersRef = collection(db, 'users');
       
       const q1 = query(usersRef, where('email', '==', inputVal));
-      const q1Snap = await getDocs(q1);
+      const q1Snap = await withTimeout(getDocs(q1), 4000, 'DATABASE_TIMEOUT');
       if (!q1Snap.empty) {
         foundUser = { id: q1Snap.docs[0].id, ...q1Snap.docs[0].data() };
       } else {
         const q2 = query(usersRef, where('username', '==', inputVal));
-        const q2Snap = await getDocs(q2);
+        const q2Snap = await withTimeout(getDocs(q2), 4000, 'DATABASE_TIMEOUT');
         if (!q2Snap.empty) {
           foundUser = { id: q2Snap.docs[0].id, ...q2Snap.docs[0].data() };
         } else {
           const defaultEmail = inputVal.includes('@') ? inputVal : `${inputVal.toLowerCase()}@manjaramane.com`;
           const q3 = query(usersRef, where('email', '==', defaultEmail));
-          const q3Snap = await getDocs(q3);
+          const q3Snap = await withTimeout(getDocs(q3), 4000, 'DATABASE_TIMEOUT');
           if (!q3Snap.empty) {
             foundUser = { id: q3Snap.docs[0].id, ...q3Snap.docs[0].data() };
           }
@@ -105,10 +116,10 @@ export default function Login({ onLoginSuccess }: LoginProps) {
 
       // 3. Fallback to standard Firebase Auth if we can't find them with password in Firestore
       const resolvedEmail = inputVal.includes('@') ? inputVal : `${inputVal.toLowerCase()}@manjaramane.com`;
-      const userCredential = await signInWithEmailAndPassword(auth, resolvedEmail, loginPassword);
+      const userCredential = await withTimeout(signInWithEmailAndPassword(auth, resolvedEmail, loginPassword), 4000, 'DATABASE_TIMEOUT');
       const uid = userCredential.user.uid;
 
-      const userDoc = await getDoc(doc(db, 'users', uid));
+      const userDoc = await withTimeout(getDoc(doc(db, 'users', uid)), 4000, 'DATABASE_TIMEOUT');
       if (userDoc.exists()) {
         const userData = userDoc.data();
         onLoginSuccess({
@@ -122,14 +133,16 @@ export default function Login({ onLoginSuccess }: LoginProps) {
     } catch (err: any) {
       console.error("Login error details:", err);
       const errMsg = err?.message || '';
-      if (errMsg.includes('permission-denied') || errMsg.includes('insufficient permissions')) {
-        setError('Database Connection Blocked: Please deploy the security rules or enable read/write access in your Firestore rules tab inside the Firebase Console.');
+      if (errMsg === 'DATABASE_TIMEOUT') {
+        setError('Database Connection Timeout: It seems your cloud Firestore database is taking longer than usual to respond. Please make sure your network is stable and that you have initialized the Firestore Database in your Firebase Console.');
+      } else if (errMsg.includes('permission-denied') || errMsg.includes('insufficient permissions')) {
+        setError('Database Connection Blocked: Please verify that you have enabled read/write access in your Firestore rules tab inside the Firebase Console.');
       } else if (errMsg.includes('not-found') || errMsg.includes('database') || errMsg.includes('null')) {
-        setError('Firestore Not Initialized: Make sure you have clicked "Create database" under the "Firestore Database" section in your new Firebase Console (manjara-mane-aduge).');
+        setError('Firestore Not Initialized: Make sure you have clicked "Create database" under the "Firestore Database" section in your Firebase Console.');
       } else if (errMsg.includes('auth/') || errMsg.includes('user-not-found') || errMsg.includes('wrong-password')) {
-        setError('Invalid credentials or the user profile was not found. If this is a new Firebase project, try signing in with the master Admin credentials: Username: "Manjaramaneaduge" and Password: "Password@123". Make sure Email/Password auth provider is enabled in your Firebase Console.');
+        setError('Invalid credentials or the user profile was not found. Please verify your username and password and try again.');
       } else {
-        setError(`Database Error: ${err.message || 'Please verify that Firestore Database and Email/Password Authentication are enabled in your manjara-mane-aduge project.'}`);
+        setError(`Database Error: ${err.message || 'Please verify that Firestore Database and Email/Password Authentication are enabled in your project.'}`);
       }
     } finally {
       setLoading(false);
@@ -231,6 +244,7 @@ export default function Login({ onLoginSuccess }: LoginProps) {
               </button>
             </div>
           </form>
+
         </motion.div>
       </div>
     </div>
