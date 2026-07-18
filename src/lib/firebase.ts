@@ -1,6 +1,6 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
-import { initializeFirestore, enableIndexedDbPersistence } from 'firebase/firestore';
+import { initializeFirestore } from 'firebase/firestore';
 import appletConfig from '../../firebase-applet-config.json';
 
 const firebaseConfig = {
@@ -16,21 +16,10 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 
-// Use initializeFirestore with long-polling to prevent connection blocks inside iframes
+// Use initializeFirestore with long-polling and disable fetch streams to guarantee iframe sandbox compatibility
 const db = initializeFirestore(app, {
   experimentalForceLongPolling: true,
-});
-
-
-// Enable offline persistence
-enableIndexedDbPersistence(db).catch((err) => {
-  if (err.code === 'failed-precondition') {
-    // Multiple tabs open, persistence can only be enabled in one tab at a time.
-    console.warn('Firestore persistence failed-precondition (multiple tabs open)');
-  } else if (err.code === 'unimplemented') {
-    // The current browser does not support all of the features required to enable persistence
-    console.warn('Firestore persistence is unimplemented in this browser');
-  }
-});
+  useFetchStreams: false,
+} as any, appletConfig.firestoreDatabaseId || "(default)");
 
 export { app, auth, db };

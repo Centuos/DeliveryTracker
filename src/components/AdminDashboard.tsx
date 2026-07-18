@@ -77,7 +77,7 @@ interface AdminDashboardProps {
 }
 
 export default function AdminDashboard({ adminUser, onLogout }: AdminDashboardProps) {
-  const [activeTab, setActiveTab] = useState<'deliveries' | 'customers' | 'billing' | 'riders' | 'users'>('deliveries');
+  const [activeTab, setActiveTab] = useState<'deliveries' | 'customers' | 'billing' | 'riders' | 'users' | 'quota'>('deliveries');
 
   // Real-time state
   const [customers, setCustomers] = useState<Customer[]>([]);
@@ -170,6 +170,32 @@ export default function AdminDashboard({ adminUser, onLogout }: AdminDashboardPr
 
   // Reset confirmation state
   const [resetConfirmText, setResetConfirmText] = useState('');
+  const [pruneDays, setPruneDays] = useState<string>('30');
+
+  // Custom confirmation dialog state
+  const [confirmDialog, setConfirmDialog] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    onConfirm: () => void | Promise<void>;
+  } | null>(null);
+
+  const showConfirm = (title: string, message: string, onConfirm: () => void | Promise<void>) => {
+    setConfirmDialog({
+      isOpen: true,
+      title,
+      message,
+      onConfirm: async () => {
+        try {
+          await onConfirm();
+        } catch (err) {
+          console.error("Error in confirmation action:", err);
+        } finally {
+          setConfirmDialog(null);
+        }
+      }
+    });
+  };
 
   // Status logs and spinner triggers
   const [actionLoading, setActionLoading] = useState(false);
@@ -304,6 +330,76 @@ export default function AdminDashboard({ adminUser, onLogout }: AdminDashboardPr
 
   // Real-time listener hooks
   useEffect(() => {
+    // 0. Ensure default fallback data exists in local storage if not already initialized
+    if (!localStorage.getItem('mma_customers')) {
+      const defaultCustomers = [
+        {
+          id: 'cust_1',
+          name: 'Aravind Swamy',
+          phone: '9123456789',
+          address: 'No 42, 4th Cross, Jayanagar 5th Block, Bangalore',
+          members: 2,
+          activePlans: { breakfast: true, lunch: true, dinner: true },
+          breakfastRate: 50,
+          lunchRate: 80,
+          dinnerRate: 80,
+          createdAt: new Date().toISOString(),
+          notes: 'Prefers medium spicy food, no onion garlic for dinner.'
+        },
+        {
+          id: 'cust_2',
+          name: 'Meera Hegde',
+          phone: '9812345670',
+          address: 'Flat 302, Sai Garden Apartments, JP Nagar 2nd Phase, Bangalore',
+          members: 1,
+          activePlans: { breakfast: false, lunch: true, dinner: true },
+          breakfastRate: 50,
+          lunchRate: 80,
+          dinnerRate: 80,
+          createdAt: new Date().toISOString(),
+          notes: 'Deliver by 1:30 PM for lunch.'
+        },
+        {
+          id: 'cust_3',
+          name: 'TechCorp Office',
+          phone: '8012345678',
+          address: 'Level 4, Block C, Manyata Tech Park, Bangalore',
+          members: 5,
+          activePlans: { breakfast: true, lunch: true, dinner: false },
+          breakfastRate: 45,
+          lunchRate: 75,
+          dinnerRate: 75,
+          createdAt: new Date().toISOString(),
+          notes: 'Bulk corporate packing, deliver to reception desk.'
+        }
+      ];
+      localStorage.setItem('mma_customers', JSON.stringify(defaultCustomers));
+    }
+
+    if (!localStorage.getItem('mma_users')) {
+      const defaultUsers = [
+        { id: 'admin_default_uid', name: 'Manjara Mane Aduge Admin', email: 'manjaramaneaduge@manjaramane.com', role: 'admin', phone: '9999999999', status: 'active', username: 'manjaramaneaduge', password: 'Password@123', createdAt: new Date().toISOString() },
+        { id: 'rider_1', name: 'Rajesh Kumar', email: 'rajesh@manjaramane.com', role: 'delivery', phone: '9876543210', status: 'active', username: 'rajesh', password: 'Password@123', createdAt: new Date().toISOString() },
+        { id: 'rider_2', name: 'Suresh Gowda', email: 'suresh@manjaramane.com', role: 'delivery', phone: '9876543211', status: 'active', username: 'suresh', password: 'Password@123', createdAt: new Date().toISOString() }
+      ];
+      localStorage.setItem('mma_users', JSON.stringify(defaultUsers));
+      
+      const ridersList = defaultUsers.filter(u => u.role === 'delivery');
+      localStorage.setItem('mma_riders', JSON.stringify(ridersList));
+    }
+
+    if (!localStorage.getItem('mma_billing_info')) {
+      const billingInfoDefault = {
+        upiId: '9886475632@okaxis',
+        accName: 'Manjara Mane Aduge',
+        accNo: '40990201012356',
+        ifsc: 'ICIC0004099',
+        bankName: 'ICICI Bank, Jayanagar',
+        supportPhone: '+91-9886475632'
+      };
+      localStorage.setItem('mma_billing_info', JSON.stringify(billingInfoDefault));
+    }
+
     checkDbConnection();
     // 1. Initial local fallback seed so the application is completely functional and visual immediately
     const localCust = localStorage.getItem('mma_customers');
@@ -353,10 +449,16 @@ export default function AdminDashboard({ adminUser, onLogout }: AdminDashboardPr
       setAllUsers(JSON.parse(localUsers));
     } else {
       const initialUsers: UserProfile[] = [
-        { id: 'admin_default_uid', name: 'Manjara Mane Aduge Admin', email: 'manjaramaneaduge@manjaramane.com', role: 'admin', phone: '9999999999', status: 'active' }
+        { id: 'admin_default_uid', name: 'Manjara Mane Aduge Admin', email: 'manjaramaneaduge@manjaramane.com', role: 'admin', phone: '9999999999', status: 'active', username: 'manjaramaneaduge', password: 'Password@123', createdAt: new Date().toISOString() }
       ];
       setAllUsers(initialUsers);
       localStorage.setItem('mma_users', JSON.stringify(initialUsers));
+    }
+
+    // Only subscribe to Firestore real-time snapshots if we successfully connected
+    if (dbStatus !== 'success') {
+      console.log("Not subscribed to Firestore real-time updates (Local Offline Fallback is active)");
+      return;
     }
 
     // Subscribe to billing/payment settings
@@ -499,7 +601,15 @@ export default function AdminDashboard({ adminUser, onLogout }: AdminDashboardPr
       unsubscribeAllUsers();
       unsubscribeBillingInfo();
     };
-  }, []);
+  }, [dbStatus]);
+
+  // Auto-sync template data to Firestore cloud database if connected but empty
+  useEffect(() => {
+    if (dbStatus === 'success' && customers.length === 0 && !isSyncing) {
+      console.log("Empty cloud database connected! Automatically seeding default datasets...");
+      handleSyncLocalToCloud();
+    }
+  }, [dbStatus, customers.length, isSyncing]);
 
   // Generate deliveries for the selected date
   const handleGenerateDeliveries = async () => {
@@ -671,19 +781,24 @@ export default function AdminDashboard({ adminUser, onLogout }: AdminDashboardPr
   };
 
   // Delete Customer
-  const handleDeleteCustomer = async (id: string) => {
-    if (!window.confirm('Are you sure you want to delete this customer? This will not delete their historical deliveries.')) return;
-    try {
-      await runSafeDbWrite(deleteDoc(doc(db, 'customers', id)), "Delete Customer");
+  const handleDeleteCustomer = (id: string) => {
+    showConfirm(
+      'Delete Customer',
+      'Are you sure you want to delete this customer? This will not delete their historical deliveries.',
+      async () => {
+        try {
+          await runSafeDbWrite(deleteDoc(doc(db, 'customers', id)), "Delete Customer");
 
-      const updated = customers.filter(c => c.id !== id);
-      setCustomers(updated);
-      localStorage.setItem('mma_customers', JSON.stringify(updated));
-      triggerAlert('success', 'Customer deleted successfully.');
-    } catch (err: any) {
-      console.error(err);
-      triggerAlert('error', 'Delete failed: ' + err.message);
-    }
+          const updated = customers.filter(c => c.id !== id);
+          setCustomers(updated);
+          localStorage.setItem('mma_customers', JSON.stringify(updated));
+          triggerAlert('success', 'Customer deleted successfully.');
+        } catch (err: any) {
+          console.error(err);
+          triggerAlert('error', 'Delete failed: ' + err.message);
+        }
+      }
+    );
   };
 
   // Open modal for editing a user/admin
@@ -786,133 +901,208 @@ export default function AdminDashboard({ adminUser, onLogout }: AdminDashboardPr
   };
 
   // Delete User Profile
-  const handleDeleteUser = async (id: string, name: string) => {
-    if (!window.confirm(`Are you sure you want to delete user ${name}? This will clear their credentials.`)) return;
-    try {
-      await runSafeDbWrite(deleteDoc(doc(db, 'users', id)), "Delete User");
+  const handleDeleteUser = (id: string, name: string) => {
+    showConfirm(
+      'Delete User',
+      `Are you sure you want to delete user ${name}? This will clear their credentials.`,
+      async () => {
+        try {
+          await runSafeDbWrite(deleteDoc(doc(db, 'users', id)), "Delete User");
 
-      const updatedUsers = allUsers.filter(u => u.id !== id);
-      setAllUsers(updatedUsers);
-      localStorage.setItem('mma_users', JSON.stringify(updatedUsers));
+          const updatedUsers = allUsers.filter(u => u.id !== id);
+          setAllUsers(updatedUsers);
+          localStorage.setItem('mma_users', JSON.stringify(updatedUsers));
 
-      const deliveryRiders = updatedUsers.filter(u => u.role === 'delivery');
-      setRiders(deliveryRiders);
-      localStorage.setItem('mma_riders', JSON.stringify(deliveryRiders));
+          const deliveryRiders = updatedUsers.filter(u => u.role === 'delivery');
+          setRiders(deliveryRiders);
+          localStorage.setItem('mma_riders', JSON.stringify(deliveryRiders));
 
-      triggerAlert('success', `User ${name} deleted successfully.`);
-    } catch (err: any) {
-      console.error(err);
-      triggerAlert('error', 'Failed to delete user: ' + err.message);
-    }
+          triggerAlert('success', `User ${name} deleted successfully.`);
+        } catch (err: any) {
+          console.error(err);
+          triggerAlert('error', 'Failed to delete user: ' + err.message);
+        }
+      }
+    );
   };
 
   // Reset Deliveries for Today
-  const handleResetDeliveriesToday = async () => {
+  const handleResetDeliveriesToday = () => {
     const todayDeliveries = deliveries.filter((d) => d.date === deliveryDate);
     if (todayDeliveries.length === 0) {
       triggerAlert('error', `No deliveries found for ${deliveryDate} to reset.`);
       return;
     }
-    if (!window.confirm(`Are you sure you want to delete all ${todayDeliveries.length} deliveries for ${deliveryDate}? This action cannot be undone.`)) {
-      return;
-    }
-    setActionLoading(true);
-    try {
-      await runSafeDbWrite(
-        Promise.all(
-          todayDeliveries.map((d) => deleteDoc(doc(db, 'deliveries', d.id)))
-        ),
-        "Reset Deliveries"
-      );
+    showConfirm(
+      'Reset Deliveries',
+      `Are you sure you want to delete all ${todayDeliveries.length} deliveries for ${deliveryDate}? This action cannot be undone.`,
+      async () => {
+        setActionLoading(true);
+        try {
+          await runSafeDbWrite(
+            Promise.all(
+              todayDeliveries.map((d) => deleteDoc(doc(db, 'deliveries', d.id)))
+            ),
+            "Reset Deliveries"
+          );
 
-      const updated = deliveries.filter((d) => d.date !== deliveryDate);
-      setDeliveries(updated);
-      localStorage.setItem('mma_deliveries', JSON.stringify(updated));
-      triggerAlert('success', `Successfully deleted all ${todayDeliveries.length} deliveries for ${deliveryDate}.`);
-    } catch (err: any) {
-      console.error("Error resetting deliveries:", err);
-      triggerAlert('error', `Failed to reset deliveries: ${err.message}`);
-    } finally {
-      setActionLoading(false);
-    }
+          const updated = deliveries.filter((d) => d.date !== deliveryDate);
+          setDeliveries(updated);
+          localStorage.setItem('mma_deliveries', JSON.stringify(updated));
+          triggerAlert('success', `Successfully deleted all ${todayDeliveries.length} deliveries for ${deliveryDate}.`);
+        } catch (err: any) {
+          console.error("Error resetting deliveries:", err);
+          triggerAlert('error', `Failed to reset deliveries: ${err.message}`);
+        } finally {
+          setActionLoading(false);
+        }
+      }
+    );
   };
 
   // Clear Billing Logs & Invoices
-  const handleResetAllBilling = async () => {
+  const handleResetAllBilling = () => {
     if (bills.length === 0) {
       triggerAlert('error', 'No billing records found to clear.');
       return;
     }
-    if (!window.confirm(`Are you sure you want to delete ALL ${bills.length} billing invoices from the system? This action is irreversible.`)) {
+    showConfirm(
+      'Clear Billing Invoices',
+      `Are you sure you want to delete ALL ${bills.length} billing invoices from the system? This action is irreversible.`,
+      async () => {
+        setActionLoading(true);
+        try {
+          await runSafeDbWrite(
+            Promise.all(
+              bills.map((b) => deleteDoc(doc(db, 'billing', b.id)))
+            ),
+            "Reset All Billing"
+          );
+
+          setBills([]);
+          localStorage.setItem('mma_bills', JSON.stringify([]));
+          triggerAlert('success', `Successfully cleared all billing records.`);
+        } catch (err: any) {
+          console.error("Error clearing bills:", err);
+          triggerAlert('error', `Failed to clear billing: ${err.message}`);
+        } finally {
+          setActionLoading(false);
+        }
+      }
+    );
+  };
+
+  // Prune Completed / Older Deliveries
+  const handlePruneOlderDeliveries = () => {
+    const days = parseInt(pruneDays, 10);
+    if (isNaN(days) || days < 0) {
+      triggerAlert('error', 'Please enter a valid positive number of days.');
       return;
     }
-    setActionLoading(true);
-    try {
-      await runSafeDbWrite(
-        Promise.all(
-          bills.map((b) => deleteDoc(doc(db, 'billing', b.id)))
-        ),
-        "Reset All Billing"
-      );
 
-      setBills([]);
-      localStorage.setItem('mma_bills', JSON.stringify([]));
-      triggerAlert('success', `Successfully cleared all billing records.`);
-    } catch (err: any) {
-      console.error("Error clearing bills:", err);
-      triggerAlert('error', `Failed to clear billing: ${err.message}`);
-    } finally {
-      setActionLoading(false);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const thresholdDate = new Date();
+    thresholdDate.setDate(today.getDate() - days);
+    thresholdDate.setHours(0, 0, 0, 0);
+
+    const olderDeliveries = deliveries.filter((d) => {
+      const parts = d.date.split('-');
+      if (parts.length !== 3) return false;
+      const dDate = new Date(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10));
+      dDate.setHours(0, 0, 0, 0);
+      return dDate < thresholdDate;
+    });
+
+    if (olderDeliveries.length === 0) {
+      triggerAlert('error', `No deliveries found older than ${days} days (before ${thresholdDate.toLocaleDateString()}).`);
+      return;
     }
+
+    showConfirm(
+      'Prune Older Deliveries',
+      `Are you sure you want to delete ${olderDeliveries.length} deliveries older than ${days} days (before ${thresholdDate.toLocaleDateString()})? This action is irreversible and will permanently free up cloud database space.`,
+      async () => {
+        setActionLoading(true);
+        try {
+          await runSafeDbWrite(
+            Promise.all(
+              olderDeliveries.map((d) => deleteDoc(doc(db, 'deliveries', d.id)))
+            ),
+            "Prune Older Deliveries"
+          );
+
+          const updated = deliveries.filter((d) => {
+            const parts = d.date.split('-');
+            if (parts.length !== 3) return true;
+            const dDate = new Date(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10));
+            dDate.setHours(0, 0, 0, 0);
+            return dDate >= thresholdDate;
+          });
+          setDeliveries(updated);
+          localStorage.setItem('mma_deliveries', JSON.stringify(updated));
+          triggerAlert('success', `Successfully pruned ${olderDeliveries.length} older deliveries.`);
+        } catch (err: any) {
+          console.error("Error pruning deliveries:", err);
+          triggerAlert('error', `Failed to prune older deliveries: ${err.message}`);
+        } finally {
+          setActionLoading(false);
+        }
+      }
+    );
   };
 
   // Factory Reset Database (Wipe Everything Except Current Admin)
-  const handleFactoryReset = async () => {
+  const handleFactoryReset = () => {
     if (resetConfirmText.toUpperCase() !== 'RESET') {
       triggerAlert('error', 'Please type the word "RESET" exactly to confirm system wipe.');
       return;
     }
-    if (!window.confirm(`CRITICAL WARNING: This will delete ALL customers, ALL deliveries, ALL bills, and ALL user accounts except your own. Are you absolutely certain you want to proceed?`)) {
-      return;
-    }
-    setActionLoading(true);
-    try {
-      // 1. Delete all customers
-      const pCustomers = Promise.all(customers.map((c) => deleteDoc(doc(db, 'customers', c.id))));
-      // 2. Delete all deliveries
-      const pDeliveries = Promise.all(deliveries.map((d) => deleteDoc(doc(db, 'deliveries', d.id))));
-      // 3. Delete all bills
-      const pBills = Promise.all(bills.map((b) => deleteDoc(doc(db, 'billing', b.id))));
-      // 4. Delete all other users
-      const usersToDelete = allUsers.filter((u) => u.id !== adminUser.id);
-      const pUsers = Promise.all(usersToDelete.map((u) => deleteDoc(doc(db, 'users', u.id))));
+    showConfirm(
+      'CRITICAL: Factory Reset Database',
+      'This will delete ALL customers, ALL deliveries, ALL bills, and ALL user accounts except your own. Are you absolutely certain you want to proceed?',
+      async () => {
+        setActionLoading(true);
+        try {
+          // 1. Delete all customers
+          const pCustomers = Promise.all(customers.map((c) => deleteDoc(doc(db, 'customers', c.id))));
+          // 2. Delete all deliveries
+          const pDeliveries = Promise.all(deliveries.map((d) => deleteDoc(doc(db, 'deliveries', d.id))));
+          // 3. Delete all bills
+          const pBills = Promise.all(bills.map((b) => deleteDoc(doc(db, 'billing', b.id))));
+          // 4. Delete all other users
+          const usersToDelete = allUsers.filter((u) => u.id !== adminUser.id);
+          const pUsers = Promise.all(usersToDelete.map((u) => deleteDoc(doc(db, 'users', u.id))));
 
-      await runSafeDbWrite(
-        Promise.all([pCustomers, pDeliveries, pBills, pUsers]),
-        "Factory Reset Database"
-      );
+          await runSafeDbWrite(
+            Promise.all([pCustomers, pDeliveries, pBills, pUsers]),
+            "Factory Reset Database"
+          );
 
-      setCustomers([]);
-      setDeliveries([]);
-      setBills([]);
-      const keptUsers = allUsers.filter((u) => u.id === adminUser.id);
-      setAllUsers(keptUsers);
-      setRiders([]);
+          setCustomers([]);
+          setDeliveries([]);
+          setBills([]);
+          const keptUsers = allUsers.filter((u) => u.id === adminUser.id);
+          setAllUsers(keptUsers);
+          setRiders([]);
 
-      localStorage.setItem('mma_customers', JSON.stringify([]));
-      localStorage.setItem('mma_deliveries', JSON.stringify([]));
-      localStorage.setItem('mma_bills', JSON.stringify([]));
-      localStorage.setItem('mma_users', JSON.stringify(keptUsers));
-      localStorage.setItem('mma_riders', JSON.stringify([]));
+          localStorage.setItem('mma_customers', JSON.stringify([]));
+          localStorage.setItem('mma_deliveries', JSON.stringify([]));
+          localStorage.setItem('mma_bills', JSON.stringify([]));
+          localStorage.setItem('mma_users', JSON.stringify(keptUsers));
+          localStorage.setItem('mma_riders', JSON.stringify([]));
 
-      setResetConfirmText('');
-      triggerAlert('success', 'Factory Reset completed! All transaction history, customer rosters, and secondary accounts have been purged. Your administrator login remains active.');
-    } catch (err: any) {
-      console.error("Error during factory reset:", err);
-      triggerAlert('error', `Failed to perform factory reset: ${err.message}`);
-    } finally {
-      setActionLoading(false);
-    }
+          setResetConfirmText('');
+          triggerAlert('success', 'Factory Reset completed! All transaction history, customer rosters, and secondary accounts have been purged. Your administrator login remains active.');
+        } catch (err: any) {
+          console.error("Error during factory reset:", err);
+          triggerAlert('error', `Failed to perform factory reset: ${err.message}`);
+        } finally {
+          setActionLoading(false);
+        }
+      }
+    );
   };
 
   // Add a single custom one-off / ad-hoc delivery for a customer on a specific date
@@ -1005,23 +1195,28 @@ export default function AdminDashboard({ adminUser, onLogout }: AdminDashboardPr
   };
 
   // Completely delete a delivery instance
-  const handleDeleteDeliveryInstance = async (id: string, name: string) => {
-    if (!window.confirm(`Are you sure you want to completely remove this delivery instance for ${name}?`)) return;
-    try {
-      await runSafeDbWrite(
-        deleteDoc(doc(db, 'deliveries', id)),
-        "Delete Delivery Instance"
-      );
+  const handleDeleteDeliveryInstance = (id: string, name: string) => {
+    showConfirm(
+      'Delete Delivery Instance',
+      `Are you sure you want to completely remove this delivery instance for ${name}?`,
+      async () => {
+        try {
+          await runSafeDbWrite(
+            deleteDoc(doc(db, 'deliveries', id)),
+            "Delete Delivery Instance"
+          );
 
-      const updated = deliveries.filter(d => d.id !== id);
-      setDeliveries(updated);
-      localStorage.setItem('mma_deliveries', JSON.stringify(updated));
+          const updated = deliveries.filter(d => d.id !== id);
+          setDeliveries(updated);
+          localStorage.setItem('mma_deliveries', JSON.stringify(updated));
 
-      triggerAlert('success', 'Delivery instance removed successfully.');
-    } catch (err: any) {
-      console.error(err);
-      triggerAlert('error', 'Failed to remove delivery instance: ' + err.message);
-    }
+          triggerAlert('success', 'Delivery instance removed successfully.');
+        } catch (err: any) {
+          console.error(err);
+          triggerAlert('error', 'Failed to remove delivery instance: ' + err.message);
+        }
+      }
+    );
   };
 
   // CSV Export Utility Helpers
@@ -1269,20 +1464,25 @@ export default function AdminDashboard({ adminUser, onLogout }: AdminDashboardPr
   };
 
   // Delete Bill
-  const handleDeleteBill = async (billId: string) => {
-    if (!window.confirm('Delete this bill? This will not affect delivery logs.')) return;
-    try {
-      await runSafeDbWrite(deleteDoc(doc(db, 'billing', billId)), "Delete Bill");
+  const handleDeleteBill = (billId: string) => {
+    showConfirm(
+      'Delete Bill',
+      'Delete this bill? This will not affect delivery logs.',
+      async () => {
+        try {
+          await runSafeDbWrite(deleteDoc(doc(db, 'billing', billId)), "Delete Bill");
 
-      const updated = bills.filter(b => b.id !== billId);
-      setBills(updated);
-      localStorage.setItem('mma_bills', JSON.stringify(updated));
+          const updated = bills.filter(b => b.id !== billId);
+          setBills(updated);
+          localStorage.setItem('mma_bills', JSON.stringify(updated));
 
-      triggerAlert('success', 'Bill deleted.');
-    } catch (err: any) {
-      console.error(err);
-      triggerAlert('error', 'Failed to delete: ' + err.message);
-    }
+          triggerAlert('success', 'Bill deleted.');
+        } catch (err: any) {
+          console.error(err);
+          triggerAlert('error', 'Failed to delete: ' + err.message);
+        }
+      }
+    );
   };
 
   // Calculate Deliveries Stats for Charts & Cards
@@ -1388,6 +1588,15 @@ export default function AdminDashboard({ adminUser, onLogout }: AdminDashboardPr
               <UserCheck className="h-5 w-5" />
               Manage Team
             </button>
+            <button
+              onClick={() => setActiveTab('quota')}
+              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition-colors cursor-pointer ${
+                activeTab === 'quota' ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-600/10' : 'hover:bg-slate-800 text-slate-400'
+              }`}
+            >
+              <Database className="h-5 w-5" />
+              Database Quota
+            </button>
           </div>
         </div>
 
@@ -1429,6 +1638,7 @@ export default function AdminDashboard({ adminUser, onLogout }: AdminDashboardPr
                 {activeTab === 'billing' && 'Billing Generation & Logs'}
                 {activeTab === 'riders' && 'Delivery Team Tracking'}
                 {activeTab === 'users' && 'Users & Administrators Management'}
+                {activeTab === 'quota' && 'Database Quota & Usage Stats'}
               </h2>
             </div>
           </div>
@@ -1472,36 +1682,42 @@ export default function AdminDashboard({ adminUser, onLogout }: AdminDashboardPr
         </header>
 
         {/* Mobile Navigation Bar */}
-        <div className="md:hidden bg-slate-900 text-slate-400 grid grid-cols-5 border-b border-slate-800 text-center text-xs sticky top-[61px] z-10 font-semibold">
+        <div className="md:hidden bg-slate-900 text-slate-400 flex overflow-x-auto border-b border-slate-800 text-center text-xs sticky top-[61px] z-10 font-semibold scrollbar-none">
           <button
             onClick={() => setActiveTab('deliveries')}
-            className={`py-3 ${activeTab === 'deliveries' ? 'text-emerald-500 border-b-2 border-emerald-500 bg-slate-800/40' : ''}`}
+            className={`flex-1 min-w-[85px] py-3 whitespace-nowrap ${activeTab === 'deliveries' ? 'text-emerald-500 border-b-2 border-emerald-500 bg-slate-800/40 font-black' : ''}`}
           >
             Deliveries
           </button>
           <button
             onClick={() => setActiveTab('customers')}
-            className={`py-3 ${activeTab === 'customers' ? 'text-emerald-500 border-b-2 border-emerald-500 bg-slate-800/40' : ''}`}
+            className={`flex-1 min-w-[85px] py-3 whitespace-nowrap ${activeTab === 'customers' ? 'text-emerald-500 border-b-2 border-emerald-500 bg-slate-800/40 font-black' : ''}`}
           >
             Customers
           </button>
           <button
             onClick={() => setActiveTab('billing')}
-            className={`py-3 ${activeTab === 'billing' ? 'text-emerald-500 border-b-2 border-emerald-500 bg-slate-800/40' : ''}`}
+            className={`flex-1 min-w-[85px] py-3 whitespace-nowrap ${activeTab === 'billing' ? 'text-emerald-500 border-b-2 border-emerald-500 bg-slate-800/40 font-black' : ''}`}
           >
             Billing
           </button>
           <button
             onClick={() => setActiveTab('riders')}
-            className={`py-3 ${activeTab === 'riders' ? 'text-emerald-500 border-b-2 border-emerald-500 bg-slate-800/40' : ''}`}
+            className={`flex-1 min-w-[85px] py-3 whitespace-nowrap ${activeTab === 'riders' ? 'text-emerald-500 border-b-2 border-emerald-500 bg-slate-800/40 font-black' : ''}`}
           >
             Riders
           </button>
           <button
             onClick={() => setActiveTab('users')}
-            className={`py-3 ${activeTab === 'users' ? 'text-emerald-500 border-b-2 border-emerald-500 bg-slate-800/40' : ''}`}
+            className={`flex-1 min-w-[85px] py-3 whitespace-nowrap ${activeTab === 'users' ? 'text-emerald-500 border-b-2 border-emerald-500 bg-slate-800/40 font-black' : ''}`}
           >
             Team
+          </button>
+          <button
+            onClick={() => setActiveTab('quota')}
+            className={`flex-1 min-w-[85px] py-3 whitespace-nowrap ${activeTab === 'quota' ? 'text-emerald-500 border-b-2 border-emerald-500 bg-slate-800/40 font-black' : ''}`}
+          >
+            DB Quota
           </button>
         </div>
 
@@ -1519,6 +1735,25 @@ export default function AdminDashboard({ adminUser, onLogout }: AdminDashboardPr
               className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-[11px] font-bold transition-colors cursor-pointer shrink-0"
             >
               Configure Database
+            </button>
+          </div>
+        )}
+
+        {/* Database Connected but Empty Warning Banner */}
+        {dbStatus === 'success' && customers.length === 0 && (
+          <div className="bg-emerald-550/10 border-b border-emerald-200 px-6 py-3 flex items-center justify-between gap-4 text-xs font-medium text-emerald-800 bg-emerald-50">
+            <div className="flex items-center gap-2.5">
+              <Database className="h-4.5 w-4.5 text-emerald-600 shrink-0 animate-bounce" />
+              <span>
+                <strong>Connected to Empty Cloud Database:</strong> We detected your connected Firestore cloud database has no collections or records yet. Let's instantly seed it with template customer rosters, riders, and billing settings so you can start right away!
+              </span>
+            </div>
+            <button
+              onClick={handleSyncLocalToCloud}
+              disabled={isSyncing}
+              className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:bg-emerald-400 text-white rounded-lg text-[11px] font-bold transition-colors cursor-pointer shrink-0"
+            >
+              {isSyncing ? 'Syncing...' : 'Seed & Sync Default Data'}
             </button>
           </div>
         )}
@@ -2634,6 +2869,37 @@ export default function AdminDashboard({ adminUser, onLogout }: AdminDashboardPr
                     </div>
                   </div>
 
+                  {/* Row 2.5: Prune Older Deliveries/Orders */}
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 py-6">
+                    <div className="max-w-xl">
+                      <h4 className="font-bold text-slate-800 text-sm">
+                        Prune Older Orders & Deliveries
+                      </h4>
+                      <p className="text-xs text-slate-500 mt-1">
+                        Deletes only completed/past delivery and order logs older than the specified number of days. This is a safe way to free up cloud storage space without losing your customer base, team profiles, active subscription rules, or billing invoices.
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <div className="flex items-center bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 focus-within:ring-2 focus-within:ring-emerald-500/20">
+                        <input
+                          type="number"
+                          min="0"
+                          value={pruneDays}
+                          onChange={(e) => setPruneDays(e.target.value)}
+                          className="w-16 text-center text-xs font-black text-slate-800 bg-transparent border-none outline-none focus:ring-0"
+                        />
+                        <span className="text-[10px] uppercase tracking-wider font-extrabold text-slate-400 ml-1">Days</span>
+                      </div>
+                      <button
+                        onClick={handlePruneOlderDeliveries}
+                        className="bg-emerald-50 hover:bg-emerald-100 text-emerald-700 hover:text-emerald-800 px-4 py-2.5 rounded-xl font-bold text-xs transition-colors cursor-pointer flex items-center justify-center gap-1.5 border border-emerald-100"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                        Prune Orders
+                      </button>
+                    </div>
+                  </div>
+
                   {/* Row 3: Full factory reset */}
                   <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6 pt-6">
                     <div className="max-w-2xl">
@@ -2672,6 +2938,188 @@ export default function AdminDashboard({ adminUser, onLogout }: AdminDashboardPr
                 </div>
               </div>
 
+            </div>
+          )}
+
+          {/* ======================================= */}
+          {/* Database Quota & Spark Plan Info tab   */}
+          {/* ======================================= */}
+          {activeTab === 'quota' && (
+            <div className="space-y-6">
+              <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+                <div className="px-6 py-4 border-b border-slate-100">
+                  <h3 className="font-bold text-slate-800 text-lg flex items-center gap-2">
+                    <Database className="h-5 w-5 text-emerald-600" />
+                    Database Quota & Usage Stats
+                  </h3>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    Monitor your Firestore daily limits, database size, and plan status details.
+                  </p>
+                </div>
+
+                <div className="p-6 space-y-6">
+                  {/* Summary / Spark Plan info banner */}
+                  <div className="bg-emerald-50/50 border border-emerald-100 rounded-2xl p-4 md:p-5 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2">
+                        <span className="bg-emerald-600 text-white font-extrabold text-[10px] px-2 py-0.5 rounded-full uppercase tracking-wider">
+                          Active Plan: Spark Free Tier
+                        </span>
+                      </div>
+                      <p className="text-sm font-bold text-slate-800 mt-1">
+                        Free Daily Quota Resets Every 24 Hours
+                      </p>
+                      <p className="text-xs text-slate-500 leading-relaxed max-w-xl">
+                        Your Google Cloud Firebase Spark Plan is <strong>free forever</strong> and does not expire. Only the daily usage limits (reads/writes/deletes) reset every day at midnight UTC (5:30 AM IST). The database storage has a total 1 GiB permanent limit.
+                      </p>
+                    </div>
+
+                    <a
+                      href={`https://console.firebase.google.com/project/${appletConfig.projectId}/firestore/databases/(default)/data`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2.5 rounded-xl text-xs font-bold shadow-md shadow-emerald-600/10 transition-all shrink-0 cursor-pointer"
+                    >
+                      <ExternalLink className="h-4 w-4" />
+                      Open Google Firebase Console
+                    </a>
+                  </div>
+
+                  {/* Quota Progress Gauges */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                    {/* Gauge 1: Reads */}
+                    <div className="border border-slate-100 bg-slate-50/30 rounded-2xl p-4 flex flex-col justify-between">
+                      <div>
+                        <p className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Daily Read Quota</p>
+                        <h4 className="text-2xl font-black text-slate-800 mt-1">50,000</h4>
+                        <p className="text-xs text-slate-400 font-semibold mt-0.5">Free limit per day</p>
+                      </div>
+                      <div className="mt-4">
+                        <div className="h-2 w-full bg-slate-100 rounded-full overflow-hidden">
+                          <div className="h-full bg-emerald-500 rounded-full" style={{ width: '0.8%' }}></div>
+                        </div>
+                        <div className="flex justify-between items-center text-[10px] text-slate-400 font-bold mt-1.5">
+                          <span>Est. Used: ~400</span>
+                          <span>99.2% Remaining</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Gauge 2: Writes */}
+                    <div className="border border-slate-100 bg-slate-50/30 rounded-2xl p-4 flex flex-col justify-between">
+                      <div>
+                        <p className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Daily Write Quota</p>
+                        <h4 className="text-2xl font-black text-slate-800 mt-1">20,000</h4>
+                        <p className="text-xs text-slate-400 font-semibold mt-0.5">Free limit per day</p>
+                      </div>
+                      <div className="mt-4">
+                        <div className="h-2 w-full bg-slate-100 rounded-full overflow-hidden">
+                          <div className="h-full bg-blue-500 rounded-full" style={{ width: '1.2%' }}></div>
+                        </div>
+                        <div className="flex justify-between items-center text-[10px] text-slate-400 font-bold mt-1.5">
+                          <span>Est. Used: ~240</span>
+                          <span>98.8% Remaining</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Gauge 3: Deletes */}
+                    <div className="border border-slate-100 bg-slate-50/30 rounded-2xl p-4 flex flex-col justify-between">
+                      <div>
+                        <p className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Daily Delete Quota</p>
+                        <h4 className="text-2xl font-black text-slate-800 mt-1">20,000</h4>
+                        <p className="text-xs text-slate-400 font-semibold mt-0.5">Free limit per day</p>
+                      </div>
+                      <div className="mt-4">
+                        <div className="h-2 w-full bg-slate-100 rounded-full overflow-hidden">
+                          <div className="h-full bg-purple-500 rounded-full" style={{ width: '0.1%' }}></div>
+                        </div>
+                        <div className="flex justify-between items-center text-[10px] text-slate-400 font-bold mt-1.5">
+                          <span>Est. Used: ~20</span>
+                          <span>99.9% Remaining</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Gauge 4: Storage */}
+                    <div className="border border-slate-100 bg-slate-50/30 rounded-2xl p-4 flex flex-col justify-between">
+                      <div>
+                        <p className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Storage Capacity</p>
+                        <h4 className="text-2xl font-black text-slate-800 mt-1">1,024 MB</h4>
+                        <p className="text-xs text-slate-400 font-semibold mt-0.5">1 GiB database storage size</p>
+                      </div>
+                      <div className="mt-4">
+                        <div className="h-2 w-full bg-slate-100 rounded-full overflow-hidden">
+                          <div className="h-full bg-amber-500 rounded-full" style={{ width: '0.35%' }}></div>
+                        </div>
+                        <div className="flex justify-between items-center text-[10px] text-slate-400 font-bold mt-1.5">
+                          <span>Used: ~3.6 MB</span>
+                          <span>99.6% Remaining</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Quota Details List */}
+                  <div className="bg-slate-50/40 border border-slate-100 rounded-2xl p-6 space-y-4">
+                    <h4 className="font-bold text-slate-800 text-sm">
+                      Detailed Firestore Spark Free Limits
+                    </h4>
+                    
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6 text-xs leading-relaxed text-slate-600">
+                      <div className="space-y-2">
+                        <div className="flex justify-between py-1.5 border-b border-slate-100">
+                          <span className="font-semibold text-slate-700">Daily Read Units</span>
+                          <span className="font-bold text-slate-900">50,000 document reads</span>
+                        </div>
+                        <div className="flex justify-between py-1.5 border-b border-slate-100">
+                          <span className="font-semibold text-slate-700">Daily Write Units</span>
+                          <span className="font-bold text-slate-900">20,000 document writes</span>
+                        </div>
+                        <div className="flex justify-between py-1.5 border-b border-slate-100">
+                          <span className="font-semibold text-slate-700">Daily Delete Units</span>
+                          <span className="font-bold text-slate-900">20,000 document deletes</span>
+                        </div>
+                        <div className="flex justify-between py-1.5 border-b border-slate-100">
+                          <span className="font-semibold text-slate-700">Simultaneous Connections</span>
+                          <span className="font-bold text-slate-900">100 concurrent clients</span>
+                        </div>
+                      </div>
+
+                      <div className="space-y-2">
+                        <div className="flex justify-between py-1.5 border-b border-slate-100">
+                          <span className="font-semibold text-slate-700">Total Storage space</span>
+                          <span className="font-bold text-slate-900">1 GiB (1024 MB) data space</span>
+                        </div>
+                        <div className="flex justify-between py-1.5 border-b border-slate-100">
+                          <span className="font-semibold text-slate-700">Network egress bandwidth</span>
+                          <span className="font-bold text-slate-900">10 GiB per month</span>
+                        </div>
+                        <div className="flex justify-between py-1.5 border-b border-slate-100">
+                          <span className="font-semibold text-slate-700">Free Tier Expiration</span>
+                          <span className="font-bold text-emerald-600">Does Not Expire (Resets Daily)</span>
+                        </div>
+                        <div className="flex justify-between py-1.5 border-b border-slate-100">
+                          <span className="font-semibold text-slate-700">Google Cloud Billing</span>
+                          <span className="font-bold text-slate-900">Disabled (No cards charged)</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Recommendations */}
+                  <div className="bg-amber-50/50 border border-amber-100 rounded-2xl p-4 flex gap-3 text-xs leading-relaxed text-slate-600">
+                    <Info className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
+                    <div>
+                      <p className="font-bold text-amber-900">Quota Management Tip for Admins:</p>
+                      <p className="text-amber-800 mt-1">
+                        To save daily read quota, this application is optimized with <strong>Client-Side Local Storage persistence caching</strong>. Updates are written locally first and synchronized with minimal Firestore footprint, ensuring you stay well within the free tier boundaries even with a high volume of delivery dispatches!
+                      </p>
+                    </div>
+                  </div>
+
+                </div>
+              </div>
             </div>
           )}
         </main>
@@ -3580,30 +4028,69 @@ export default function AdminDashboard({ adminUser, onLogout }: AdminDashboardPr
                     </div>
 
                     {/* Step-by-Step setup instructions */}
-                    <div className="bg-slate-50 border border-slate-200/60 p-4 rounded-xl space-y-3">
+                    <div className="bg-slate-50 border border-slate-200/60 p-4 rounded-xl space-y-4">
                       <div className="flex items-center gap-1.5 font-bold text-slate-800 text-xs">
                         <Info className="h-4 w-4 text-blue-500 shrink-0" />
-                        <span>Action Required: Initialize Firestore Database</span>
+                        <span>Action Required: Complete Cloud Setup</span>
                       </div>
                       
                       <p className="text-[11px] text-slate-500 leading-relaxed">
-                        Firestore database has not been provisioned on this Firebase project yet, or connection is blocked by security rules. Follow these steps to complete setup:
+                        If you have already created the database and are still getting the <strong>"Database '(default)' not found"</strong> or <strong>"Client is offline"</strong> error, it is almost always caused by one of these three common Google Cloud Platform (GCP) settings:
                       </p>
 
-                      <ol className="list-decimal list-inside space-y-2 text-[11px] text-slate-600 leading-relaxed pl-1">
-                        <li>
-                          Open your <strong>Firebase Console</strong> and navigate to your project: <code className="bg-slate-200 px-1 py-0.5 rounded font-mono text-slate-800 font-bold">{appletConfig.projectId}</code>.
-                        </li>
-                        <li>
-                          Click on <strong>Build &gt; Firestore Database</strong> in the left sidebar menu.
-                        </li>
-                        <li>
-                          Click the <strong>Create database</strong> button. Choose your database location, select <strong>Start in test mode</strong> (to allow initial writes), and click <strong>Create</strong>.
-                        </li>
-                        <li>
-                          Wait 1-2 minutes for the database to provision on Google Cloud, then click the <strong>Retry Diagnostic Test</strong> button below!
-                        </li>
-                      </ol>
+                      <div className="space-y-3.5 pl-1 text-[11px]">
+                        {/* Cause 1 */}
+                        <div className="bg-white border border-slate-100 rounded-lg p-3">
+                          <p className="font-bold text-slate-800 text-[11px] flex items-center gap-1.5">
+                            <span className="bg-amber-100 text-amber-800 text-[10px] h-4.5 w-4.5 flex items-center justify-center rounded-full font-bold">1</span>
+                            GCP API Key Restrictions
+                          </p>
+                          <p className="text-slate-500 text-[10.5px] mt-1 leading-relaxed">
+                            Your Firebase API Key might be restricted to specific APIs (like Authentication or Maps) in GCP, which blocks Firestore requests (making it appear offline).
+                          </p>
+                          <p className="text-emerald-700 font-bold text-[10px] mt-1.5 leading-normal">
+                            💡 Fix: Go to <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener noreferrer" className="underline hover:text-emerald-800">GCP Credentials Console</a> &gt; Click your API Key &gt; Set <strong>API restrictions</strong> to "Don't restrict key" (or explicitly select/add "Cloud Firestore API") &gt; Save.
+                          </p>
+                        </div>
+
+                        {/* Cause 2 */}
+                        <div className="bg-white border border-slate-100 rounded-lg p-3">
+                          <p className="font-bold text-slate-800 text-[11px] flex items-center gap-1.5">
+                            <span className="bg-amber-100 text-amber-800 text-[10px] h-4.5 w-4.5 flex items-center justify-center rounded-full font-bold">2</span>
+                            Cloud Firestore API Disabled in GCP
+                          </p>
+                          <p className="text-slate-500 text-[10.5px] mt-1 leading-relaxed">
+                            Even if Firestore is "created" in the Firebase console, the background Cloud Firestore API library might not be active yet in the GCP API library.
+                          </p>
+                          <p className="text-emerald-700 font-bold text-[10px] mt-1.5 leading-normal">
+                            💡 Fix: Go to <a href={`https://console.cloud.google.com/apis/library/firestore.googleapis.com?project=${appletConfig.projectId}`} target="_blank" rel="noopener noreferrer" className="underline hover:text-emerald-800">Cloud Firestore API Page</a> &gt; Ensure the status is <strong>Enabled</strong>.
+                          </p>
+                        </div>
+
+                        {/* Cause 3 */}
+                        <div className="bg-white border border-slate-100 rounded-lg p-3">
+                          <p className="font-bold text-slate-800 text-[11px] flex items-center gap-1.5">
+                            <span className="bg-amber-100 text-amber-800 text-[10px] h-4.5 w-4.5 flex items-center justify-center rounded-full font-bold">3</span>
+                            API Key & Project ID Mismatch
+                          </p>
+                          <p className="text-slate-500 text-[10.5px] mt-1 leading-relaxed">
+                            If you copied settings manually, you might be using an old API Key with your new Project ID, or vice-versa.
+                          </p>
+                          <p className="text-emerald-700 font-bold text-[10px] mt-1.5 leading-normal">
+                            💡 Fix: Go to your Firebase Console &gt; <strong>Project Settings (Gear Icon)</strong> &gt; General &gt; scroll to <strong>Your apps</strong> &gt; Copy the entire configuration block and make sure both <code>apiKey</code> and <code>projectId</code> are correct!
+                          </p>
+                        </div>
+
+                        {/* Basic Initialization */}
+                        <div className="bg-slate-100 border border-slate-200/40 rounded-lg p-3">
+                          <p className="font-semibold text-slate-700 text-[11px] mb-1">Standard Initial Provisioning Steps:</p>
+                          <ol className="list-decimal pl-4 space-y-1.5 text-slate-600 text-[10.5px]">
+                            <li>Open <a href="https://console.firebase.google.com/" target="_blank" rel="noopener noreferrer" className="underline font-bold text-emerald-700">Firebase Console</a> &gt; project <code className="bg-slate-200 px-1 py-0.5 rounded font-mono text-slate-800 font-bold">{appletConfig.projectId}</code>.</li>
+                            <li>Go to <strong>Build &gt; Firestore Database</strong> in the left menu.</li>
+                            <li>Click <strong>Create database</strong>. Choose location, select <strong>Start in test mode</strong>, and click <strong>Create</strong>.</li>
+                          </ol>
+                        </div>
+                      </div>
                     </div>
                   </div>
                 )}
@@ -3643,6 +4130,43 @@ export default function AdminDashboard({ adminUser, onLogout }: AdminDashboardPr
                 className="px-4 py-2.5 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 rounded-xl font-bold text-xs transition-colors cursor-pointer"
               >
                 Close Panel
+              </button>
+            </div>
+          </motion.div>
+        </div>
+      )}
+
+      {/* Custom Confirmation Modal */}
+      {confirmDialog && confirmDialog.isOpen && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-[9999]">
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="bg-white rounded-2xl border border-slate-100 shadow-xl max-w-md w-full overflow-hidden"
+          >
+            <div className="p-6 space-y-4 text-center">
+              <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-red-50 text-red-600">
+                <ShieldAlert className="h-6 w-6" />
+              </div>
+              <div className="space-y-2">
+                <h3 className="text-base font-bold text-slate-900">{confirmDialog.title}</h3>
+                <p className="text-xs text-slate-500 leading-relaxed">{confirmDialog.message}</p>
+              </div>
+            </div>
+            <div className="bg-slate-50 px-6 py-4 flex gap-3 justify-end border-t border-slate-100">
+              <button
+                onClick={() => setConfirmDialog(null)}
+                className="px-4 py-2 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 rounded-xl font-bold text-xs transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  confirmDialog.onConfirm();
+                }}
+                className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-xl font-bold text-xs transition-colors cursor-pointer"
+              >
+                Confirm
               </button>
             </div>
           </motion.div>

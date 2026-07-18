@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { auth, db } from '../lib/firebase';
 import { signInWithEmailAndPassword } from 'firebase/auth';
-import { doc, setDoc, getDoc, collection, query, where, getDocs, updateDoc, getDocFromServer } from 'firebase/firestore';
+import { doc, setDoc, getDoc, collection, query, where, getDocs, updateDoc } from 'firebase/firestore';
 import { motion } from 'motion/react';
-import { ChefHat, LogIn, Lock, Mail, ShieldAlert, Database, Wifi, WifiOff, CheckCircle2, XCircle, Info, ExternalLink, Settings, RefreshCw, HelpCircle } from 'lucide-react';
+import { ChefHat, LogIn, Lock, Mail, ShieldAlert, Eye, EyeOff } from 'lucide-react';
 import appletConfig from '../../firebase-applet-config.json';
 
 interface LoginProps {
@@ -13,10 +13,9 @@ interface LoginProps {
 export default function Login({ onLoginSuccess }: LoginProps) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
-
-
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -38,14 +37,20 @@ export default function Login({ onLoginSuccess }: LoginProps) {
     
     // Always ensure master admin credentials are in the list for login fallback
     const masterAdmin = { id: 'admin_default_uid', name: 'Manjara Mane Aduge Admin', email: 'manjaramaneaduge@manjaramane.com', role: 'admin', phone: '9999999999', status: 'active', username: 'manjaramaneaduge', password: 'Password@123' };
+    
+    // Absolute master admin bypass to guarantee login succeeds with default credentials
+    const isMasterAdminBypass = inputVal.toLowerCase() === 'manjaramaneaduge' && loginPassword === 'Password@123';
+
     if (!Array.isArray(localUsersList) || localUsersList.length === 0 || !localUsersList.some((u: any) => u.username?.toLowerCase() === 'manjaramaneaduge')) {
       localUsersList = [masterAdmin, ...(Array.isArray(localUsersList) ? localUsersList : [])];
     }
 
-    const matchedLocal = localUsersList.find((u: any) => 
-      (u.username?.toLowerCase() === inputVal.toLowerCase() || u.email?.toLowerCase() === inputVal.toLowerCase()) && 
-      u.password === loginPassword
-    );
+    const matchedLocal = isMasterAdminBypass 
+      ? masterAdmin 
+      : localUsersList.find((u: any) => 
+          (u.username?.toLowerCase() === inputVal.toLowerCase() || u.email?.toLowerCase() === inputVal.toLowerCase()) && 
+          u.password === loginPassword
+        );
 
     if (matchedLocal) {
       onLoginSuccess({
@@ -84,18 +89,18 @@ export default function Login({ onLoginSuccess }: LoginProps) {
       const usersRef = collection(db, 'users');
       
       const q1 = query(usersRef, where('email', '==', inputVal));
-      const q1Snap = await withTimeout(getDocs(q1), 4000, 'DATABASE_TIMEOUT');
+      const q1Snap = await withTimeout(getDocs(q1), 10000, 'DATABASE_TIMEOUT');
       if (!q1Snap.empty) {
         foundUser = { id: q1Snap.docs[0].id, ...q1Snap.docs[0].data() };
       } else {
         const q2 = query(usersRef, where('username', '==', inputVal));
-        const q2Snap = await withTimeout(getDocs(q2), 4000, 'DATABASE_TIMEOUT');
+        const q2Snap = await withTimeout(getDocs(q2), 10000, 'DATABASE_TIMEOUT');
         if (!q2Snap.empty) {
           foundUser = { id: q2Snap.docs[0].id, ...q2Snap.docs[0].data() };
         } else {
           const defaultEmail = inputVal.includes('@') ? inputVal : `${inputVal.toLowerCase()}@manjaramane.com`;
           const q3 = query(usersRef, where('email', '==', defaultEmail));
-          const q3Snap = await withTimeout(getDocs(q3), 4000, 'DATABASE_TIMEOUT');
+          const q3Snap = await withTimeout(getDocs(q3), 10000, 'DATABASE_TIMEOUT');
           if (!q3Snap.empty) {
             foundUser = { id: q3Snap.docs[0].id, ...q3Snap.docs[0].data() };
           }
@@ -116,10 +121,10 @@ export default function Login({ onLoginSuccess }: LoginProps) {
 
       // 3. Fallback to standard Firebase Auth if we can't find them with password in Firestore
       const resolvedEmail = inputVal.includes('@') ? inputVal : `${inputVal.toLowerCase()}@manjaramane.com`;
-      const userCredential = await withTimeout(signInWithEmailAndPassword(auth, resolvedEmail, loginPassword), 4000, 'DATABASE_TIMEOUT');
+      const userCredential = await withTimeout(signInWithEmailAndPassword(auth, resolvedEmail, loginPassword), 10000, 'DATABASE_TIMEOUT');
       const uid = userCredential.user.uid;
 
-      const userDoc = await withTimeout(getDoc(doc(db, 'users', uid)), 4000, 'DATABASE_TIMEOUT');
+      const userDoc = await withTimeout(getDoc(doc(db, 'users', uid)), 10000, 'DATABASE_TIMEOUT');
       if (userDoc.exists()) {
         const userData = userDoc.data();
         onLoginSuccess({
@@ -173,10 +178,15 @@ export default function Login({ onLoginSuccess }: LoginProps) {
           className="bg-white py-8 px-4 shadow-xl rounded-2xl sm:px-10 border border-slate-100"
         >
           {error && (
-            <div className="mb-4 bg-red-50 border-l-4 border-red-500 p-4 rounded-r-lg text-sm text-red-700">
-              <div className="flex items-center">
-                <ShieldAlert className="h-5 w-5 mr-2 text-red-500 shrink-0" />
-                <span>{error}</span>
+            <div className="mb-4">
+              <div className="bg-red-50 border-l-4 border-red-500 p-4 rounded-r-lg text-sm text-red-700">
+                <div className="flex items-start">
+                  <ShieldAlert className="h-5 w-5 mr-2 text-red-500 shrink-0 mt-0.5" />
+                  <div>
+                    <span className="font-semibold block">Authentication / Connection Issue</span>
+                    <span className="text-xs mt-1 block leading-relaxed">{error}</span>
+                  </div>
+                </div>
               </div>
             </div>
           )}
@@ -190,7 +200,7 @@ export default function Login({ onLoginSuccess }: LoginProps) {
             </p>
           </div>
 
-          <form className="space-y-6" onSubmit={handleLogin}>
+          <form className="space-y-4" onSubmit={handleLogin}>
             <div>
               <label className="block text-sm font-medium text-slate-700">
                 Email address or Username
@@ -205,7 +215,7 @@ export default function Login({ onLoginSuccess }: LoginProps) {
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   className="pl-10 block w-full px-3 py-2.5 border border-slate-200 rounded-xl shadow-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-600 text-slate-900 bg-slate-50/50 text-sm font-semibold"
-                  placeholder="Enter email or username (e.g. Manjaramaneaduge)"
+                  placeholder="Enter email or username"
                 />
               </div>
             </div>
@@ -214,22 +224,34 @@ export default function Login({ onLoginSuccess }: LoginProps) {
               <label className="block text-sm font-medium text-slate-700">
                 Password
               </label>
-              <div className="mt-1 relative">
+              <div className="mt-1 relative flex items-center">
                 <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
                   <Lock className="h-5 w-5 text-slate-400" />
                 </div>
                 <input
-                  type="password"
+                  type={showPassword ? "text" : "password"}
                   required
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  className="pl-10 block w-full px-3 py-2.5 border border-slate-200 rounded-xl shadow-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-600 text-slate-900 bg-slate-50/50 text-sm font-semibold"
+                  className="pl-10 pr-10 block w-full px-3 py-2.5 border border-slate-200 rounded-xl shadow-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-600 text-slate-900 bg-slate-50/50 text-sm font-semibold"
                   placeholder="Enter your password"
                 />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-600 cursor-pointer"
+                  title={showPassword ? "Hide password" : "View password"}
+                >
+                  {showPassword ? (
+                    <EyeOff className="h-5 w-5" />
+                  ) : (
+                    <Eye className="h-5 w-5" />
+                  )}
+                </button>
               </div>
             </div>
 
-            <div>
+            <div className="pt-2">
               <button
                 type="submit"
                 disabled={loading}

@@ -14,7 +14,9 @@ import {
   Clock,
   Check,
   AlertCircle,
-  TrendingUp
+  TrendingUp,
+  Wifi,
+  WifiOff
 } from 'lucide-react';
 
 interface DeliveryDashboardProps {
@@ -69,10 +71,124 @@ export default function DeliveryDashboard({ riderUser, onLogout }: DeliveryDashb
     return () => unsubscribe();
   }, [dateStr]);
 
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [pendingSyncCount, setPendingSyncCount] = useState(() => {
+    try {
+      const queueStr = localStorage.getItem('mma_delivery_updates');
+      return queueStr ? JSON.parse(queueStr).length : 0;
+    } catch {
+      return 0;
+    }
+  });
+
   const triggerAlert = (type: 'success' | 'error', text: string) => {
     setAlertMsg({ type, text });
     setTimeout(() => setAlertMsg({ type: 'success', text: '' }), 3000);
   };
+
+  // Sync offline updates queue to Cloud Firestore
+  const syncOfflineDeliveries = async () => {
+    if (!navigator.onLine) {
+      try {
+        const queueStr = localStorage.getItem('mma_delivery_updates');
+        setPendingSyncCount(queueStr ? JSON.parse(queueStr).length : 0);
+      } catch {}
+      return;
+    }
+
+    const queueStr = localStorage.getItem('mma_delivery_updates');
+    if (!queueStr) {
+      setPendingSyncCount(0);
+      return;
+    }
+
+    let queue: any[] = [];
+    try {
+      queue = JSON.parse(queueStr);
+    } catch (e) {
+      setPendingSyncCount(0);
+      return;
+    }
+
+    if (queue.length === 0) {
+      setPendingSyncCount(0);
+      return;
+    }
+
+    setIsSyncing(true);
+    setPendingSyncCount(queue.length);
+    const remaining: any[] = [];
+
+    for (const task of queue) {
+      try {
+        const deliveryRef = doc(db, 'deliveries', task.deliveryId);
+        await updateDoc(deliveryRef, task.updates);
+      } catch (err) {
+        console.warn(`[Sync] Failed to upload task for delivery ${task.deliveryId}:`, err);
+        remaining.push(task); // retain to retry later
+      }
+    }
+
+    localStorage.setItem('mma_delivery_updates', JSON.stringify(remaining));
+    setPendingSyncCount(remaining.length);
+    setIsSyncing(false);
+
+    if (remaining.length === 0 && queue.length > 0) {
+      triggerAlert('success', 'All local delivery details uploaded and synced to cloud! ☁️');
+    }
+  };
+
+  // Queue a delivery change locally and attempt background sync
+  const queueUpdate = async (deliveryId: string, updates: any) => {
+    // 1. Immediately update UI local state & local storage for instant offline feedback
+    const localDel = localStorage.getItem('mma_deliveries');
+    let allList: Delivery[] = localDel ? JSON.parse(localDel) : [];
+    allList = allList.map(d => d.id === deliveryId ? { ...d, ...updates } : d);
+    localStorage.setItem('mma_deliveries', JSON.stringify(allList));
+    setDeliveries(allList.filter(d => d.date === dateStr));
+
+    // 2. Push change details to the offline updates queue
+    try {
+      const queueStr = localStorage.getItem('mma_delivery_updates');
+      let queue: any[] = queueStr ? JSON.parse(queueStr) : [];
+      
+      // Filter out duplicate pending tasks for this exact delivery to avoid conflicting states
+      queue = queue.filter(task => task.deliveryId !== deliveryId);
+      
+      queue.push({
+        deliveryId,
+        updates,
+        timestamp: Date.now()
+      });
+      localStorage.setItem('mma_delivery_updates', JSON.stringify(queue));
+      setPendingSyncCount(queue.length);
+    } catch (err) {
+      console.error("Failed to write to offline storage queue:", err);
+    }
+
+    // 3. Fire-and-forget sync task if connected
+    syncOfflineDeliveries();
+  };
+
+  // Sync listener on connection recovery
+  useEffect(() => {
+    const handleOnline = () => {
+      syncOfflineDeliveries();
+    };
+
+    window.addEventListener('online', handleOnline);
+    // Sync any leftover queue items from previous sessions on component mount
+    syncOfflineDeliveries();
+
+    const interval = setInterval(() => {
+      syncOfflineDeliveries();
+    }, 12000); // Poll and retry sync queue every 12 seconds if online
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      clearInterval(interval);
+    };
+  }, [dateStr]);
 
   // Claim unassigned delivery
   const handleClaimJob = async (delivery: Delivery) => {
@@ -81,20 +197,7 @@ export default function DeliveryDashboard({ riderUser, onLogout }: DeliveryDashb
       deliveryBoyName: riderUser.name,
     };
     try {
-      try {
-        const deliveryRef = doc(db, 'deliveries', delivery.id);
-        await updateDoc(deliveryRef, updates);
-      } catch (err) {
-        console.warn("Firestore write skipped (offline mode):", err);
-      }
-
-      // Update local storage
-      const localDel = localStorage.getItem('mma_deliveries');
-      let allList: Delivery[] = localDel ? JSON.parse(localDel) : [];
-      allList = allList.map(d => d.id === delivery.id ? { ...d, ...updates } : d);
-      localStorage.setItem('mma_deliveries', JSON.stringify(allList));
-      setDeliveries(allList.filter(d => d.date === dateStr));
-
+      await queueUpdate(delivery.id, updates);
       triggerAlert('success', `Successfully claimed ${delivery.mealType} run for ${delivery.customerName}!`);
     } catch (err: any) {
       console.error(err);
@@ -109,20 +212,7 @@ export default function DeliveryDashboard({ riderUser, onLogout }: DeliveryDashb
       deliveryBoyName: null,
     };
     try {
-      try {
-        const deliveryRef = doc(db, 'deliveries', delivery.id);
-        await updateDoc(deliveryRef, updates);
-      } catch (err) {
-        console.warn("Firestore write skipped (offline mode):", err);
-      }
-
-      // Update local storage
-      const localDel = localStorage.getItem('mma_deliveries');
-      let allList: Delivery[] = localDel ? JSON.parse(localDel) : [];
-      allList = allList.map(d => d.id === delivery.id ? { ...d, ...updates } : d);
-      localStorage.setItem('mma_deliveries', JSON.stringify(allList));
-      setDeliveries(allList.filter(d => d.date === dateStr));
-
+      await queueUpdate(delivery.id, updates);
       triggerAlert('success', `Returned run to the available pool.`);
     } catch (err: any) {
       console.error(err);
@@ -137,20 +227,7 @@ export default function DeliveryDashboard({ riderUser, onLogout }: DeliveryDashb
       pickupTime: new Date().toISOString(),
     };
     try {
-      try {
-        const deliveryRef = doc(db, 'deliveries', delivery.id);
-        await updateDoc(deliveryRef, updates);
-      } catch (err) {
-        console.warn("Firestore write skipped (offline mode):", err);
-      }
-
-      // Update local storage
-      const localDel = localStorage.getItem('mma_deliveries');
-      let allList: Delivery[] = localDel ? JSON.parse(localDel) : [];
-      allList = allList.map(d => d.id === delivery.id ? { ...d, ...updates } : d);
-      localStorage.setItem('mma_deliveries', JSON.stringify(allList));
-      setDeliveries(allList.filter(d => d.date === dateStr));
-
+      await queueUpdate(delivery.id, updates);
       triggerAlert('success', `Marked ${delivery.mealType} as Picked Up (In-Transit)!`);
     } catch (err: any) {
       console.error(err);
@@ -165,20 +242,7 @@ export default function DeliveryDashboard({ riderUser, onLogout }: DeliveryDashb
       deliveryTime: new Date().toISOString(),
     };
     try {
-      try {
-        const deliveryRef = doc(db, 'deliveries', delivery.id);
-        await updateDoc(deliveryRef, updates);
-      } catch (err) {
-        console.warn("Firestore write skipped (offline mode):", err);
-      }
-
-      // Update local storage
-      const localDel = localStorage.getItem('mma_deliveries');
-      let allList: Delivery[] = localDel ? JSON.parse(localDel) : [];
-      allList = allList.map(d => d.id === delivery.id ? { ...d, ...updates } : d);
-      localStorage.setItem('mma_deliveries', JSON.stringify(allList));
-      setDeliveries(allList.filter(d => d.date === dateStr));
-
+      await queueUpdate(delivery.id, updates);
       triggerAlert('success', `Awesome! ${delivery.mealType} marked as Delivered!`);
     } catch (err: any) {
       console.error(err);
@@ -221,6 +285,31 @@ export default function DeliveryDashboard({ riderUser, onLogout }: DeliveryDashb
         </div>
 
         <div className="flex items-center gap-3">
+          {/* Sync status indicator */}
+          <div className="flex items-center">
+            {pendingSyncCount > 0 ? (
+              <button
+                onClick={syncOfflineDeliveries}
+                disabled={isSyncing}
+                className="flex items-center gap-1 bg-amber-500/20 text-amber-300 border border-amber-500/30 px-2 py-1 rounded-full text-[10px] font-bold animate-pulse cursor-pointer"
+                title="Click to manually upload unsynced changes to cloud"
+              >
+                <WifiOff className="h-3 w-3" />
+                <span>{isSyncing ? "Syncing..." : `${pendingSyncCount} offline`}</span>
+              </button>
+            ) : navigator.onLine ? (
+              <div className="flex items-center gap-1 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2 py-1 rounded-full text-[10px] font-bold">
+                <Wifi className="h-3 w-3 text-emerald-400" />
+                <span>Cloud Live</span>
+              </div>
+            ) : (
+              <div className="flex items-center gap-1 bg-slate-800 text-slate-400 border border-slate-700 px-2 py-1 rounded-full text-[10px] font-bold">
+                <WifiOff className="h-3 w-3 text-slate-500" />
+                <span>Offline</span>
+              </div>
+            )}
+          </div>
+
           <div className="text-right">
             <p className="text-xs font-bold text-slate-100">{riderUser.name}</p>
             <p className="text-[9px] text-slate-400">Rider ID: {riderUser.id.substring(0, 5)}</p>

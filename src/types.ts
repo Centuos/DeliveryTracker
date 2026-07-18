@@ -7,6 +7,7 @@ export interface UserProfile {
   status: 'active' | 'inactive';
   username?: string;
   password?: string;
+  createdAt?: string;
 }
 
 export interface Customer {
