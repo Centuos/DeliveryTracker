@@ -14,23 +14,12 @@
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
     <script>
-      // Clear all service workers and caches to ensure the latest code runs in development
+      // Register the service worker for production to make the site a fully functional PWA
       if ('serviceWorker' in navigator) {
-        navigator.serviceWorker.getRegistrations().then((registrations) => {
-          for (let registration of registrations) {
-            registration.unregister().then(() => {
-              console.log('Service Worker unregistered successfully');
-            });
-          }
-        });
-      }
-      if ('caches' in window) {
-        caches.keys().then((names) => {
-          for (let name of names) {
-            caches.delete(name).then(() => {
-              console.log('Cache cleared:', name);
-            });
-          }
+        window.addEventListener('load', () => {
+          navigator.serviceWorker.register('/sw.js')
+            .then((reg) => console.log('Service Worker registered successfully:', reg.scope))
+            .catch((err) => console.warn('Service Worker registration failed:', err));
         });
       }
     </script>
